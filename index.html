@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="shopify-api-key" content="646438f2d8c49abfe99a2adeab3d073b">
+<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shopify ↔ QuickBooks sync</title>
+<style>
+:root{
+  --paper:#F6F7F5; --panel:#FFFFFF; --ink:#1E2B33; --steel:#687985; --rule:#DCE1E3; --rule-soft:#ECEFF0;
+  --brass:#B5832A; --brass-deep:#8C6420; --brass-pale:#F4EAD6;
+  --good:#2E7A57; --good-pale:#E3F1EA; --bad:#B23F2E; --bad-pale:#F7E4E0; --warn:#9A6B12; --warn-pale:#FBF0D9;
+  --head:"Bahnschrift","DIN Alternate","DIN 2014","Roboto Condensed","DejaVu Sans Condensed","Arial Narrow",sans-serif;
+  --body:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--body)}
+a{color:var(--brass-deep)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.num,td.r,th.r{font-variant-numeric:tabular-nums}
+
+/* frame */
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+nav{border-right:1px solid var(--rule);padding:22px 0;background:var(--panel);position:sticky;top:0;height:100vh;overflow:auto}
+.brand{padding:0 22px 20px;font-family:var(--head);font-size:19px;line-height:1.2;letter-spacing:.01em}
+.brand small{display:block;font-family:var(--body);font-size:12.5px;color:var(--steel);margin-top:4px}
+nav a{display:flex;justify-content:space-between;align-items:center;padding:8px 22px;color:var(--ink);text-decoration:none;border-left:3px solid transparent}
+nav a:hover{background:var(--rule-soft)}
+nav a.on{border-left-color:var(--brass);background:var(--brass-pale);font-weight:600}
+nav .count{margin-left:6px;font-family:var(--head);font-size:13px;min-width:22px;text-align:center;border-radius:10px;padding:0 6px;background:var(--bad);color:#fff}
+nav .count.soft{background:var(--rule);color:var(--ink)}
+nav .foot{padding:18px 22px;font-size:12.5px;color:var(--steel);border-top:1px solid var(--rule);margin-top:18px}
+nav .foot a{display:inline;padding:0;border:0;color:var(--brass-deep);text-decoration:underline}
+nav .foot a:hover{background:none}
+main{padding:26px 34px 60px;max-width:1280px;width:100%;min-width:0}
+h1{font-family:var(--head);font-weight:600;font-size:28px;line-height:1.15;margin:0 0 4px}
+h2{font-family:var(--head);font-weight:600;font-size:19px;margin:30px 0 10px}
+.sub{color:var(--steel);margin:0 0 20px;max-width:75ch}
+.toprow{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;margin-bottom:18px}
+
+/* the key tag: sync health */
+.tag{position:relative;display:flex;align-items:center;gap:16px;padding:14px 22px 14px 52px;border-radius:12px 34px 34px 12px;
+     background:var(--brass);color:#fff;min-width:330px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.tag::before{content:"";position:absolute;left:18px;top:50%;width:16px;height:16px;margin-top:-8px;border-radius:50%;
+     background:var(--paper);box-shadow:inset 0 1px 2px rgba(0,0,0,.35)}
+.tag.bad{background:var(--bad)} .tag.idle{background:var(--steel)} .tag.run{background:var(--good)}
+.tag .big{font-family:var(--head);font-size:22px;line-height:1.1}
+.tag .small{font-size:13px;opacity:.92}
+.tag .bar{height:5px;background:rgba(255,255,255,.3);border-radius:3px;margin-top:6px;overflow:hidden}
+.tag .bar i{display:block;height:100%;background:#fff}
+
+.banner{border:1px solid var(--warn);background:var(--warn-pale);padding:10px 14px;border-radius:6px;margin:0 0 18px;max-width:900px}
+.banner.bad{border-color:var(--bad);background:var(--bad-pale)}
+
+/* period picker */
+.period{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.period button{border:1px solid var(--rule);background:var(--panel);padding:5px 11px;border-radius:5px;cursor:pointer}
+.period button.on{border-color:var(--ink);background:var(--ink);color:#fff}
+.period input{border:1px solid var(--rule);background:var(--panel);padding:4px 6px;border-radius:5px}
+
+/* ledger row of figures */
+.ledger{display:flex;flex-wrap:wrap;background:var(--panel);border:1px solid var(--rule);border-radius:6px}
+.fig{flex:1 1 150px;padding:14px 18px;border-right:1px solid var(--rule)}
+.fig:last-child{border-right:0}
+.fig .v{font-family:var(--head);font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
+.fig .l{color:var(--steel);font-size:13px}
+.fig.lead .v{font-size:32px;color:var(--brass-deep)}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px 18px}
+.panel h2{margin-top:0}
+
+/* chart */
+.chart{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px 18px 8px;margin-top:18px}
+.chart svg{display:block;width:100%;height:220px}
+.legend{display:flex;gap:18px;font-size:13px;color:var(--steel)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+
+/* bar lists */
+.blist{list-style:none;margin:0;padding:0}
+.blist li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+.blist li:last-child{border-bottom:0}
+.blist .meter{grid-column:1/-1;height:6px;background:var(--rule-soft);border-radius:3px;overflow:hidden}
+.blist .meter i{display:block;height:100%;background:var(--ink)}
+.blist .amt{font-variant-numeric:tabular-nums}
+.blist .who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.muted{color:var(--steel)}
+
+/* attention list */
+.att{list-style:none;margin:0;padding:0}
+.att li{padding:8px 0 8px 14px;border-left:3px solid var(--bad);margin:0 0 8px;background:var(--bad-pale);border-radius:0 4px 4px 0;padding-right:10px}
+.att li.w{border-left-color:var(--warn);background:var(--warn-pale)}
+.att li.ok{border-left-color:var(--good);background:var(--good-pale)}
+
+/* tables */
+.tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.tools input[type=search]{border:1px solid var(--rule);background:var(--panel);padding:6px 10px;border-radius:5px;min-width:260px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{border:1px solid var(--rule);background:var(--panel);border-radius:14px;padding:3px 11px;cursor:pointer;font-size:13.5px}
+.chips button.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.tools .spacer{flex:1}
+.btn{border:1px solid var(--ink);background:var(--panel);padding:5px 12px;border-radius:5px;cursor:pointer}
+.btn:hover{background:var(--ink);color:#fff}
+.tablewrap{background:var(--panel);border:1px solid var(--rule);border-radius:6px;overflow:auto;max-height:70vh}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{position:sticky;top:0;background:#EEF1F2;text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--rule);white-space:nowrap;cursor:pointer;user-select:none}
+th.nosort{cursor:default}
+th .arrow{color:var(--brass-deep);margin-left:4px}
+td{padding:7px 10px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+td.r,th.r{text-align:right;white-space:nowrap}
+td.nw{white-space:nowrap}
+td.wide{min-width:230px}
+td .pill{white-space:normal}
+tr.click{cursor:pointer}
+tr.click:hover td{background:#FAFAF8}
+tr.open td{background:var(--brass-pale)}
+tr.detail td{background:#FCFBF7;padding:10px 18px 16px}
+.count-line{color:var(--steel);font-size:13px;margin-top:8px}
+.pill{display:inline-block;font-size:12.5px;padding:1px 8px;border-radius:10px;background:var(--rule-soft);white-space:nowrap}
+.pill.good{background:var(--good-pale);color:var(--good)} .pill.bad{background:var(--bad-pale);color:var(--bad)}
+.pill.warn{background:var(--warn-pale);color:var(--warn)} .pill.brass{background:var(--brass-pale);color:var(--brass-deep)}
+.lines{border-collapse:collapse;width:auto;min-width:60%;font-size:13.5px;margin-top:6px}
+.lines td,.lines th{border-bottom:1px solid var(--rule-soft);padding:4px 10px;background:none;position:static}
+.empty{padding:28px;color:var(--steel);text-align:center}
+.subtabs{display:flex;gap:0;border-bottom:1px solid var(--rule);margin:18px 0 12px}
+.subtabs button{border:0;background:none;padding:8px 14px;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1px}
+.subtabs button.on{border-bottom-color:var(--brass);font-weight:600}
+pre.summary{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 16px;white-space:pre-wrap;font:13.5px/1.5 var(--body);margin:0}
+.back{display:inline-block;margin-bottom:10px}
+
+/* inside Shopify admin: Shopify already provides the left sidebar, so pages become tabs */
+body.embedded .app{grid-template-columns:1fr}
+body.embedded nav{position:static;height:auto;display:flex;flex-wrap:wrap;gap:2px;padding:6px 26px 0;border-right:0;border-bottom:1px solid var(--rule)}
+body.embedded nav .brand{display:none}
+body.embedded nav a{border-left:0;border-bottom:3px solid transparent;padding:8px 12px;margin-bottom:-1px}
+body.embedded nav a.on{border-bottom-color:var(--brass);background:none}
+body.embedded nav .foot{display:block;border:0;margin:0 0 0 auto;padding:8px 0;align-self:center}
+body.embedded main{padding:22px 26px 50px}
+@media (max-width:900px){
+  .app{grid-template-columns:1fr} nav{position:static;height:auto;display:flex;flex-wrap:wrap;padding:10px}
+  nav .brand,nav .foot{display:none} nav a{border-left:0;border-bottom:3px solid transparent;padding:6px 10px}
+  nav a.on{border-bottom-color:var(--brass)} main{padding:18px} .grid2{grid-template-columns:1fr} .tag{min-width:0;width:100%}
+  .fig{flex-basis:45%;border-bottom:1px solid var(--rule)}
+}
+@media (prefers-reduced-motion:no-preference){ .tag .bar i{transition:width .6s ease} }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav aria-label="Pages">
+    <div class="brand">Doug's Lock &amp; Key<small>Shopify ↔ QuickBooks sync</small></div>
+    <a href="#overview" data-page="overview">Overview</a>
+    <a href="#sales" data-page="sales">Sales posted</a>
+    <a href="#invoices" data-page="invoices">Open invoices <span class="count soft" id="n-inv" hidden></span></a>
+    <a href="#inventory" data-page="inventory">Stock</a>
+    <a href="#products" data-page="products">Products</a>
+    <a href="#customers" data-page="customers">Customers</a>
+    <a href="#history" data-page="history">Sync history</a>
+    <a href="#problems" data-page="problems">Problems <span class="count" id="n-prob" hidden></span></a>
+    <div class="foot" id="foot">Loading…</div>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+</div>
+
+<script>
+"use strict";
+const $ = (s, el=document) => el.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"});
+const money = v => (v===null||v===undefined||v==="") ? "" : usd.format(+v);
+const n0 = v => (v===null||v===undefined||v==="") ? "" : (+v).toLocaleString("en-US");
+const when = ts => ts ? new Date(ts*1000).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "";
+const ago = ts => { if(!ts) return "never"; const m=Math.round((Date.now()/1000-ts)/60);
+  if(m<1) return "just now"; if(m<60) return m+" min ago"; const h=Math.round(m/60); if(h<48) return h+" h ago"; return Math.round(h/24)+" days ago"; };
+const ymd = d => d.toISOString().slice(0,10);
+const shortDate = s => { if(!s) return ""; const d=new Date(s+"T12:00:00");
+  return d.toLocaleDateString("en-US", d.getFullYear()===new Date().getFullYear() ? {month:"short",day:"numeric"} : {month:"short",day:"numeric",year:"numeric"}); };
+const niceDate = s => s ? new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "";
+const ADMIN = !!document.querySelector('meta[name="shopify-api-key"]');
+async function api(path){
+  if(ADMIN) return adminApi(path);
+  const r = await fetch(path,{cache:"no-store"}); if(!r.ok) throw new Error(path+" "+r.status); return r.json();
+}
+
+/* ---------- Shopify admin mode: data published by the sync program into Shopify ---------- */
+const AD = { status:null, loadedAt:0, parts:{} };
+async function gql(query){
+  const r = await fetch("shopify:admin/api/2026-10/graphql.json",{method:"POST",body:JSON.stringify({query})});
+  const j = await r.json(); if(j.errors) throw new Error(j.errors.map(e=>e.message).join("; ")); return j.data;
+}
+async function loadKeys(keys){
+  const need = keys.filter(k=>!(k in AD.parts));
+  for(let i=0;i<need.length;i+=8){
+    const batch=need.slice(i,i+8);
+    const q = "{ currentAppInstallation { " + batch.map((k,j)=>`m${j}: metafield(namespace: "qbsync", key: "${k}") { value }`).join(" ") + " } }";
+    const d = (await gql(q)).currentAppInstallation;
+    batch.forEach((k,j)=>{ const v=d["m"+j]; AD.parts[k] = v ? JSON.parse(v.value) : {cols:[],rows:[]}; });
+  }
+}
+async function adminStatus(){
+  if(AD.status && Date.now()-AD.loadedAt < 60000) return AD.status;
+  const d = (await gql('{ currentAppInstallation { metafield(namespace: "qbsync", key: "status") { value } } }')).currentAppInstallation;
+  if(!d || !d.metafield) return null;
+  const st = JSON.parse(d.metafield.value);
+  if(!AD.status || AD.status.published !== st.published) AD.parts = {};
+  AD.status = st; AD.loadedAt = Date.now(); return st;
+}
+async function adminTable(name){
+  const st = AD.status; const keys = (st.index||{})[name] || [];
+  await loadKeys(keys);
+  const out=[]; keys.forEach(k=>{ const t=AD.parts[k]; t.rows.forEach(r=>{ const o={}; t.cols.forEach((c,i)=>o[c]=r[i]); out.push(o); }); });
+  return out;
+}
+async function adminSales(){
+  const rows = await adminTable("sales");
+  rows.forEach(r=>{ if(r.lines && Array.isArray(r.lines[0]||null)) r.lines = r.lines.map(l=>({desc:l[0],qty:l[1],rate:l[2],amount:l[3],item:l[4],account:l[5]})); });
+  return rows;
+}
+function inRange(q){ const p=new URLSearchParams(q); let [f,t]=periodRange(); return [p.get("from")||f, p.get("to")||t]; }
+async function adminApi(path){
+  const [route, q=""] = path.split("?");
+  const st = await adminStatus();
+  if(!st) return {empty:true, settings:{}, kpis:{}};
+  const P = st.problems;
+  if(route==="/api/problems") return P;
+  if(route==="/api/runs") return {rows: st.runs};
+  if(route==="/api/run"){ const id=+new URLSearchParams(q).get("id"); const r=st.runs.find(x=>x.id===id); if(!r) return {missing:true};
+    const acts = (await adminTable("activity")).filter(a=>a.run_id===id).reverse();
+    return {...r, report:{}, activity:acts, admin_note: !st.activity_runs.includes(id)}; }
+  if(route==="/api/inventory") return {...st.meta.inventory, rows: await adminTable("inventory")};
+  if(route==="/api/products") return {linked: st.meta.products.linked, rows: await adminTable("products")};
+  if(route==="/api/customers") return {linked: st.meta.customers.linked, rows: await adminTable("customers"), top: await adminTable("topcustomers")};
+  const sales = await adminSales();
+  if(route==="/api/invoices"){
+    const today=new Date(); const rows = sales.filter(r=>r.kind==="invoice").map(r=>{ const bal=Math.round(((r.total||0)-(r.paid||0))*100)/100;
+      return {...r, lines:undefined, balance:bal, open:bal>0.005, age_days: Math.floor((today-new Date(r.date+"T12:00:00"))/864e5)}; })
+      .sort((a,b)=>a.date.localeCompare(b.date));
+    return {rows, payments: await adminTable("payments")};
+  }
+  const [from,to] = inRange(q);
+  const inR = sales.filter(r=>r.date>=from && r.date<=to);
+  if(route==="/api/sales") return {from,to, rows:[...inR].sort((a,b)=> b.date.localeCompare(a.date) || String(b.order_name).localeCompare(String(a.order_name)))};
+  // overview
+  const k={}; const add=(n,v)=>k[n]=(k[n]||0)+(v||0);
+  const daily={}, byM={}, byA={}, byS={}, items={};
+  inR.forEach(r=>{ const tot=r.total||0; add("sales",tot); add("orders",1); add(r.kind==="receipt"?"receipts":"invoices",1);
+    ["tax","discount","tip","shipping","refunded","subtotal","giftcard"].forEach(f=>add(f,r[f]));
+    const d=daily[r.date]||(daily[r.date]={receipts:0,invoices:0,count:0}); d[r.kind==="receipt"?"receipts":"invoices"]+=tot; d.count++;
+    const mk=r.method||(r.kind==="invoice"?"Invoice (unpaid)":"No payment"); const m=byM[mk]||(byM[mk]={total:0,count:0}); m.total+=tot; m.count++;
+    const sk=r.source||"unknown"; const s=byS[sk]||(byS[sk]={total:0,count:0}); s.total+=tot; s.count++;
+    (r.lines||[]).forEach(l=>{ if(l.qty!==""&&l.qty!==null&&l.qty!==undefined){ byA[l.account||"?"]=(byA[l.account||"?"]||0)+(l.amount||0);
+      const it=items[l.desc||"?"]||(items[l.desc||"?"]={qty:0,amount:0}); it.qty+=+l.qty; it.amount+=l.amount||0; } }); });
+  k.net_sales=(k.sales||0)-(k.refunded||0); k.avg_order=k.orders?k.sales/k.orders:0;
+  const open = sales.filter(r=>r.kind==="invoice" && (r.total||0)-(r.paid||0)>0.005);
+  k.open_invoices=open.length; k.open_invoices_total=open.reduce((a,r)=>a+(r.total-(r.paid||0)),0);
+  const days=[]; for(let d=new Date(from+"T12:00:00"); ymd(d)<=to && days.length<400; d.setDate(d.getDate()+1)){ const iso=ymd(d); days.push({date:iso, ...(daily[iso]||{receipts:0,invoices:0,count:0})}); }
+  const list=(o,f)=>Object.entries(o).map(([name,v])=>typeof v==="number"?{name,total:v}:{name,...v}).sort((a,b)=>f(b)-f(a));
+  return { settings: st.settings, running:null, last_run: st.runs[0]||null, last_live_ok: st.last_live_ok, from, to, kpis:k, daily:days,
+    by_method:list(byM,x=>x.total), by_account:list(byA,x=>x.total), by_source:list(byS,x=>x.total), top_items:list(items,x=>x.amount).slice(0,10),
+    problem_count: P.failed.length + P.last_errors.filter(e=>!e.startsWith("Order ")).length, waiting_count: P.waiting.length, published: st.published };
+}
+
+let SETTINGS = {};
+const state = { period: localStorage.getItem("period") || "30d", from: null, to: null };
+
+/* ---------- period ---------- */
+function periodRange(){
+  const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  const p = state.period;
+  if(p==="custom" && state.from && state.to) return [state.from, state.to];
+  if(p==="today") return [ymd(d), ymd(d)];
+  if(p==="7d"){ const s=new Date(d); s.setDate(s.getDate()-6); return [ymd(s), ymd(d)]; }
+  if(p==="month") return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)];
+  if(p==="lastmonth") return [ymd(new Date(d.getFullYear(), d.getMonth()-1, 1)), ymd(new Date(d.getFullYear(), d.getMonth(), 0))];
+  if(p==="year") return [ymd(new Date(d.getFullYear(),0,1)), ymd(d)];
+  const s=new Date(d); s.setDate(s.getDate()-29); return [ymd(s), ymd(d)];
+}
+function periodPicker(onChange){
+  const opts=[["today","Today"],["7d","7 days"],["30d","30 days"],["month","This month"],["lastmonth","Last month"],["year","This year"],["custom","Custom"]];
+  const [f,t] = periodRange();
+  const wrap = document.createElement("div"); wrap.className="period"; wrap.setAttribute("role","group"); wrap.setAttribute("aria-label","Date range");
+  wrap.innerHTML = opts.map(([k,l])=>`<button type="button" data-p="${k}" class="${state.period===k?"on":""}" aria-pressed="${state.period===k}">${l}</button>`).join("")
+    + `<span ${state.period==="custom"?"":"hidden"} id="customdates"><input type="date" id="pf" value="${f}" aria-label="From"> to <input type="date" id="pt" value="${t}" aria-label="To"></span>`;
+  wrap.addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b) return;
+    state.period=b.dataset.p; localStorage.setItem("period", state.period);
+    if(state.period==="custom"){ const [a,z]=periodRange(); state.from=a; state.to=z; }
+    onChange(); });
+  wrap.addEventListener("change", ()=>{ state.from=$("#pf",wrap).value; state.to=$("#pt",wrap).value; onChange(); });
+  return wrap;
+}
+
+/* ---------- generic table ---------- */
+function makeTable(host, {columns, rows, search=true, chips=null, detail=null, csvName="report", emptyText="Nothing here yet.", sort=null}){
+  const st = { q:"", chip: chips ? chips[0][0] : null, sortKey: sort ? sort[0] : null, dir: sort ? sort[1] : 1, open: new Set() };
+  host.innerHTML = `<div class="tools">${search?'<input type="search" placeholder="Search" aria-label="Search this table">':""}
+     <div class="chips">${(chips||[]).map(([k,l])=>`<button type="button" data-k="${esc(k)}">${esc(l)}</button>`).join("")}</div>
+     <span class="spacer"></span><button type="button" class="btn" data-csv>Download CSV</button></div>
+     <div class="tablewrap"><table><thead><tr>${columns.map(c=>`<th class="${c.r?"r":""} ${c.nosort?"nosort":""}" data-k="${c.k}" scope="col">${esc(c.l)}<span class="arrow"></span></th>`).join("")}</tr></thead><tbody></tbody></table></div>
+     <div class="count-line"></div>`;
+  const tbody=$(".tablewrap > table > tbody",host), head=$(".tablewrap > table > thead",host), countLine=$(".count-line",host);
+  const filtered = () => {
+    let r = rows;
+    if(chips && st.chip){ const f = chips.find(c=>c[0]===st.chip)[2]; if(f) r = r.filter(f); }
+    if(st.q){ const q=st.q.toLowerCase(); r = r.filter(x => columns.some(c => String(c.v ? c.v(x) : x[c.k] ?? "").toLowerCase().includes(q))); }
+    if(st.sortKey){ const c = columns.find(c=>c.k===st.sortKey); const val = x => c.sv ? c.sv(x) : (c.v ? c.v(x) : x[c.k]);
+      r = [...r].sort((a,b)=>{ const A=val(a), B=val(b); const na=typeof A==="number"||(A!==""&&A!==null&&!isNaN(A)&&typeof A!=="boolean"&&c.r);
+        if(na) return ((+A||0)-(+B||0))*st.dir; return String(A??"").localeCompare(String(B??""))*st.dir; }); }
+    return r;
+  };
+  const draw = () => {
+    const r = filtered();
+    $$chips();
+    head.querySelectorAll("th").forEach(th=>{ const a=$(".arrow",th); a.textContent = th.dataset.k===st.sortKey ? (st.dir>0?"▲":"▼") : "";
+      th.setAttribute("aria-sort", th.dataset.k===st.sortKey ? (st.dir>0?"ascending":"descending") : "none"); });
+    if(!r.length){ tbody.innerHTML = `<tr><td colspan="${columns.length}" class="empty">${esc(rows.length? "No rows match." : emptyText)}</td></tr>`; countLine.textContent=""; return; }
+    const shown = r.slice(0, 2000);
+    tbody.innerHTML = shown.map((x,i)=>{ const id = x.__id ?? i; const open = st.open.has(id);
+      const main = `<tr class="${detail?"click":""} ${open?"open":""}" data-id="${esc(id)}" ${detail?'tabindex="0" aria-expanded="'+open+'"':""}>${columns.map(c=>`<td class="${c.r?"r":""} ${c.nw?"nw":""} ${c.w?"wide":""}">${c.f ? c.f(x) : esc(c.v ? c.v(x) : x[c.k])}</td>`).join("")}</tr>`;
+      return main + (open && detail ? `<tr class="detail"><td colspan="${columns.length}">${detail(x)}</td></tr>` : ""); }).join("");
+    countLine.textContent = `${r.length.toLocaleString()} of ${rows.length.toLocaleString()} rows` + (r.length>shown.length?` (showing first ${shown.length})`:"");
+    host._filtered = r;
+  };
+  function $$chips(){ host.querySelectorAll(".chips button").forEach(b=>{ const on=b.dataset.k===st.chip; b.classList.toggle("on",on); b.setAttribute("aria-pressed",on); }); }
+  rows.forEach((x,i)=>{ if(x.__id===undefined) x.__id=i; });
+  host.addEventListener("input", e=>{ if(e.target.type==="search"){ st.q=e.target.value; draw(); }});
+  host.addEventListener("click", e=>{
+    const th=e.target.closest("th"); if(th && head.contains(th) && !th.classList.contains("nosort")){ const k=th.dataset.k; st.dir = st.sortKey===k ? -st.dir : 1; st.sortKey=k; draw(); return; }
+    const chip=e.target.closest(".chips button"); if(chip){ st.chip=chip.dataset.k; draw(); return; }
+    if(e.target.closest("[data-csv]")){ downloadCsv(csvName, columns, host._filtered||rows); return; }
+    if(e.target.closest("a")) return;
+    const tr=e.target.closest("tr.click"); if(tr){ toggle(tr); }
+  });
+  host.addEventListener("keydown", e=>{ const tr=e.target.closest("tr.click"); if(tr && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); toggle(tr); }});
+  function toggle(tr){ const id=rows.find(x=>String(x.__id)===tr.dataset.id)?.__id; if(id===undefined) return; st.open.has(id)?st.open.delete(id):st.open.add(id); draw(); }
+  draw();
+}
+function downloadCsv(name, columns, rows){
+  const cell = v => { const s=String(v??""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const out = [columns.map(c=>cell(c.l)).join(",")].concat(rows.map(x=>columns.map(c=>cell(c.csv ? c.csv(x) : (c.v ? c.v(x) : x[c.k]))).join(",")));
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([out.join("\r\n")],{type:"text/csv"}));
+  a.download=`${name}_${ymd(new Date())}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+
+/* ---------- small pieces ---------- */
+function shopifyOrderLink(row){
+  const id = String(row.order_id||"").split("/").pop();
+  if(ADMIN && id) return `<a href="shopify://admin/orders/${esc(id)}" target="_top">${esc(row.order_name)}</a>`;
+  if(!SETTINGS.admin_url || !id) return esc(row.order_name);
+  return `<a href="${esc(SETTINGS.admin_url)}/orders/${esc(id)}" target="_blank" rel="noopener">${esc(row.order_name)}</a>`;
+}
+function statusPill(s){
+  const map={ok:["good","Finished"],errors:["warn","Finished with errors"],failed:["bad","Stopped"],running:["brass","Running"],interrupted:["bad","Interrupted"]};
+  const [c,l]=map[s]||["","?"]; return `<span class="pill ${c}">${l}</span>`;
+}
+function barList(items, valueFmt, labelKey="name", valueKey="total", extra=null){
+  if(!items.length) return `<p class="muted">Nothing in this period.</p>`;
+  const max = Math.max(...items.map(x=>Math.abs(x[valueKey]))) || 1;
+  return `<ul class="blist">${items.map(x=>`<li><span class="who">${esc(x[labelKey])}${extra?` <span class="muted">${esc(extra(x))}</span>`:""}</span><span class="amt">${valueFmt(x[valueKey])}</span>
+    <span class="meter"><i style="width:${Math.max(1,Math.abs(x[valueKey])/max*100)}%"></i></span></li>`).join("")}</ul>`;
+}
+function dailyChart(days){
+  const W=1000,H=220,pl=58,pr=10,pt=10,pb=26;
+  const max = Math.max(1, ...days.map(d=>d.receipts+d.invoices));
+  const nice = (()=>{ const p=Math.pow(10,Math.floor(Math.log10(max))); const m=max/p; return (m<=1?1:m<=2?2:m<=5?5:10)*p; })();
+  const bw=(W-pl-pr)/days.length; const y=v=>pt+(H-pt-pb)*(1-v/nice);
+  let g=""; for(let i=0;i<=4;i++){ const v=nice*i/4; g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="#ECEFF0"/><text x="${pl-8}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="#687985">${usd.format(v).replace(".00","")}</text>`; }
+  const step=Math.ceil(days.length/12);
+  const bars=days.map((d,i)=>{ const x=pl+i*bw+bw*.15, w=Math.max(1,bw*.7);
+    const r=d.receipts, v=d.invoices; const tip=`${niceDate(d.date)}: ${usd.format(r+v)} (${d.count} orders)`;
+    return `<g><title>${esc(tip)}</title>${r>0?`<rect x="${x}" y="${y(r)}" width="${w}" height="${y(0)-y(r)}" fill="#1E2B33"/>`:""}
+      ${v>0?`<rect x="${x}" y="${y(r+v)}" width="${w}" height="${y(r)-y(r+v)}" fill="#B5832A"/>`:""}
+      ${i%step===0?`<text x="${x+w/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#687985">${esc(new Date(d.date+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}))}</text>`:""}</g>`; }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Sales per day">${g}${bars}</svg>`;
+}
+
+/* ---------- pages ---------- */
+const pages = {};
+
+pages.overview = async (main) => {
+  const [f,t] = periodRange();
+  const o = await api(`/api/overview?from=${f}&to=${t}`);
+  if(o.empty && ADMIN){ main.innerHTML = `<h1>Overview</h1><p class="sub">No sync data has reached Shopify yet. On the QuickBooks PC, put this page's address in config.ini as panel_url, restart the sync program, and run a sync from the QuickBooks Web Connector.</p>`; return; }
+  if(o.empty){ main.innerHTML = `<h1>Overview</h1><p class="sub">The sync hasn't run yet. In QuickBooks open File > App Management > Update Web Services, tick Shopify Sync and click Update Selected.</p>`; return; }
+  const s=o.settings||{}, k=o.kpis, lr=o.last_run;
+  let tagClass="", big="Waiting for first sync", small="Click Update Selected in the QuickBooks Web Connector", bar="";
+  if(o.running){ tagClass="run"; big="Syncing now"; small=`${o.running.progress}% done`; bar=`<div class="bar"><i style="width:${o.running.progress}%"></i></div>`; }
+  else if(lr){
+    if(lr.status==="failed"||lr.status==="interrupted"){ tagClass="bad"; big="Last sync stopped"; small=`${ago(lr.finished||lr.started)}, see Problems`; }
+    else if(lr.status==="errors"){ tagClass="bad"; big=`Synced with ${lr.errors.length} ${lr.errors.length===1?"error":"errors"}`; small=`${ago(lr.finished)}, ${when(lr.finished)}`; }
+    else { big = lr.mode==="preview" ? "Preview finished" : "In sync"; small=`Last run ${ago(lr.finished)}, ${when(lr.finished)}`; if(lr.mode==="preview") tagClass="idle"; }
+  }
+  main.innerHTML = `
+    <div class="toprow">
+      <div><h1>Overview</h1><p class="sub" style="margin:0">Sales the sync has posted to QuickBooks, and anything that needs you.</p></div>
+      <div class="tag ${tagClass}" role="status"><div><div class="big">${esc(big)}</div><div class="small">${esc(small)}</div>${bar}</div></div>
+    </div>
+    ${s.mode==="preview"?`<div class="banner">Preview mode is on, so nothing is being posted to QuickBooks yet. Check what the sync <em>would</em> do under Sync history, then set <strong>mode = live</strong> in config.ini.</div>`:""}
+    ${s.error?`<div class="banner bad">config.ini has a problem: ${esc(s.error)}</div>`:""}
+    ${s.mode==="live"&&!s.push_inventory?`<div class="banner">Stock counts are not being sent to Shopify yet (push_inventory = no). Review the Stock page, then turn it on in config.ini.</div>`:""}
+    <div id="period"></div>
+    <h2>${esc(niceDate(o.from))} to ${esc(niceDate(o.to))}</h2>
+    <div class="ledger">
+      <div class="fig lead"><div class="v">${money(k.net_sales||0)}</div><div class="l">Net sales posted (after refunds)</div></div>
+      <div class="fig"><div class="v">${n0(k.orders||0)}</div><div class="l">${n0(k.receipts||0)} receipts, ${n0(k.invoices||0)} invoices</div></div>
+      <div class="fig"><div class="v">${money(k.avg_order||0)}</div><div class="l">Average order</div></div>
+      <div class="fig"><div class="v">${money(k.tax||0)}</div><div class="l">Sales tax collected</div></div>
+      <div class="fig"><div class="v">${money(k.refunded||0)}</div><div class="l">Refunded</div></div>
+      <div class="fig"><div class="v">${money(k.discount||0)}</div><div class="l">Discounts given</div></div>
+      <div class="fig"><div class="v">${money(k.open_invoices_total||0)}</div><div class="l"><a href="#invoices">${n0(k.open_invoices||0)} open invoices</a> (all dates)</div></div>
+    </div>
+    <div class="chart"><div class="legend"><span><i style="background:#1E2B33"></i>Sales receipts</span><span><i style="background:#B5832A"></i>Invoices</span></div>${dailyChart(o.daily)}</div>
+    <div class="grid2" style="margin-top:26px">
+      <div><h2 style="margin-top:0">Needs your attention</h2><div id="attn"></div></div>
+      <div><h2 style="margin-top:0">How customers paid</h2>${barList(o.by_method, money, "name","total", x=>`${x.count} ${x.count===1?"order":"orders"}`)}</div>
+      <div><h2 style="margin-top:0">Sales by income account</h2>${barList(o.by_account, money)}
+        <p class="muted" style="font-size:13px">Product and labor lines before discounts and tax.</p></div>
+      <div><h2 style="margin-top:0">Top sellers</h2>${barList(o.top_items, money, "name","amount", x=>`× ${n0(x.qty)}`)}</div>
+    </div>`;
+  $("#period",main).appendChild(periodPicker(()=>route()));
+  const p = await api("/api/problems");
+  const items = [];
+  p.failed.forEach(x=>items.push(`<li>Order ${esc(x.order_name)} didn't post: ${esc(x.error)}. It retries every run.</li>`));
+  p.last_errors.filter(e=>!e.startsWith("Order ")).forEach(e=>items.push(`<li>${esc(e)}</li>`));
+  if(p.waiting.length) items.push(`<li class="w">${p.waiting.length} unpaid ${p.waiting.length===1?"order is":"orders are"} waiting for payment before posting.</li>`);
+  p.last_warnings.slice(0,4).forEach(w=>items.push(`<li class="w">${esc(w)}</li>`));
+  if(p.last_warnings.length>4) items.push(`<li class="w"><a href="#problems">${p.last_warnings.length-4} more warnings</a></li>`);
+  if(o.last_live_ok===null && s.mode==="live") items.push(`<li class="w">No live sync has finished yet.</li>`);
+  $("#attn",main).innerHTML = items.length ? `<ul class="att">${items.join("")}</ul>` : `<ul class="att"><li class="ok">Nothing needs you right now.</li></ul>`;
+};
+
+pages.sales = async (main) => {
+  const [f,t] = periodRange();
+  const d = await api(`/api/sales?from=${f}&to=${t}`);
+  main.innerHTML = `<h1>Sales posted</h1><p class="sub">Every Shopify order the sync has put into QuickBooks. Click a row to see its lines and which QuickBooks items and accounts they went to.</p><div id="period"></div><div id="t" style="margin-top:14px"></div>`;
+  $("#period",main).appendChild(periodPicker(()=>route()));
+  const rows = (d.rows||[]).map(r=>({...r, __id:r.order_id}));
+  makeTable($("#t",main), { rows, csvName:"sales", sort:["date",-1], emptyText:"No sales posted in this period.",
+    chips:[["all","All"],["receipt","Sales receipts",x=>x.kind==="receipt"],["invoice","Invoices",x=>x.kind==="invoice"],["refunded","With refunds",x=>x.refunded>0]],
+    columns:[
+      {k:"date",l:"Date",nw:1,f:x=>esc(shortDate(x.date)),csv:x=>x.date},
+      {k:"order_name",l:"Shopify order",f:shopifyOrderLink},
+      {k:"ref",l:"QuickBooks no."},
+      {k:"kind",l:"Type",f:x=>x.kind==="invoice"?'<span class="pill brass">Invoice</span>':'<span class="pill">Receipt</span>',v:x=>x.kind},
+      {k:"customer",l:"Customer"},
+      {k:"method",l:"Paid by",nw:1},
+      {k:"subtotal",l:"Items",r:1,f:x=>money(x.subtotal)},
+      {k:"discount",l:"Discount",r:1,f:x=>x.discount?money(-x.discount):""},
+      {k:"tax",l:"Tax",r:1,f:x=>money(x.tax)},
+      {k:"total",l:"Total",r:1,f:x=>`<strong>${money(x.total)}</strong>`},
+      {k:"refunded",l:"Refunded",r:1,f:x=>x.refunded?`<span style="color:var(--bad)">${money(x.refunded)}</span>`:""},
+    ],
+    detail: x => `<table class="lines"><thead><tr><th>Line</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th><th>QuickBooks item</th><th>Account</th></tr></thead><tbody>${
+      (x.lines||[]).map(l=>`<tr><td>${esc(l.desc)}</td><td class="r">${esc(l.qty)}</td><td class="r">${l.rate===""?"":money(l.rate)}</td><td class="r">${money(l.amount)}</td><td>${esc(l.item)}</td><td class="muted">${esc(l.account)}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">Line detail isn\'t available for orders synced before the dashboard was added.</td></tr>'
+    }</tbody></table><p class="muted" style="margin:8px 0 0">Posted ${esc(when(x.posted))}${x.source?`, from ${esc(x.source==="pos"?"Shopify POS":x.source)}`:""}.</p>`
+  });
+};
+
+pages.invoices = async (main) => {
+  const d = await api("/api/invoices");
+  const open = d.rows.filter(r=>r.open);
+  const owed = open.reduce((a,r)=>a+r.balance,0);
+  main.innerHTML = `<h1>Open invoices</h1><p class="sub">Unpaid Shopify orders the sync posted to QuickBooks as invoices. When the customer pays in Shopify, the payment is recorded automatically on the next sync.</p>
+    <div class="ledger" style="max-width:640px"><div class="fig lead"><div class="v">${money(owed)}</div><div class="l">Still owed</div></div>
+    <div class="fig"><div class="v">${open.length}</div><div class="l">Open invoices</div></div>
+    <div class="fig"><div class="v">${open.filter(r=>r.age_days>30).length}</div><div class="l">Over 30 days old</div></div></div>
+    <div id="t" style="margin-top:18px"></div><h2>Payments recorded</h2><div id="p"></div>`;
+  makeTable($("#t",main), { rows:d.rows.map(r=>({...r,__id:r.order_id})), csvName:"invoices", sort:["date",1], emptyText:"No invoices yet.",
+    chips:[["open","Open",x=>x.open],["paid","Paid",x=>!x.open],["all","All"]],
+    columns:[
+      {k:"date",l:"Date",nw:1,f:x=>esc(shortDate(x.date)),csv:x=>x.date},
+      {k:"order_name",l:"Shopify order",f:shopifyOrderLink},{k:"ref",l:"QuickBooks no."},{k:"customer",l:"Customer"},
+      {k:"total",l:"Total",r:1,f:x=>money(x.total)},{k:"paid",l:"Paid",r:1,f:x=>money(x.paid)},
+      {k:"balance",l:"Balance",r:1,f:x=>`<strong>${money(x.balance)}</strong>`},
+      {k:"age_days",l:"Age",r:1,f:x=>x.open?`${x.age_days} days`:"",sv:x=>x.age_days},
+    ]});
+  makeTable($("#p",main), { rows:d.payments, csvName:"invoice_payments", search:false, emptyText:"No payments recorded yet.",
+    columns:[{k:"synced_at",l:"Recorded",f:x=>esc(when(x.synced_at))},{k:"order_name",l:"Order"},{k:"customer",l:"Customer"},{k:"amount",l:"Amount",r:1,f:x=>money(x.amount)}]});
+};
+
+pages.inventory = async (main) => {
+  const d = await api("/api/inventory");
+  main.innerHTML = `<h1>Stock</h1><p class="sub">QuickBooks is the master count. Each sync compares it with Shopify and, when stock sending is on, updates Shopify to match. Unposted Shopify sales are subtracted first so nothing is double-counted.</p>
+    <p class="muted">${d.run_id?`From the ${d.mode} run finished ${esc(when(d.finished))}.`:""}</p><div id="t"></div>`;
+  const rows = d.rows.map(r=>({...r, diff: (r.new_shopify_on_hand===""||r.shopify_on_hand==="") ? "" : (+r.new_shopify_on_hand) - (+r.shopify_on_hand)}));
+  const neg = x => String(x.action).startsWith("NOT pushed");
+  makeTable($("#t",main), { rows, csvName:"stock", sort:["shopify_title",1], emptyText:"No stock report yet. Run a sync first.",
+    chips:[["diff","Different",x=>x.diff!==""&&x.diff!==0],["neg","Below zero in QuickBooks",neg],["pushed","Updated this run",x=>String(x.action).startsWith("updated")],["new","New in QuickBooks",x=>String(x.quickbooks_item).endsWith("(new)")],["all","All"]],
+    columns:[
+      {k:"shopify_title",l:"Product",w:1},{k:"quickbooks_item",l:"QuickBooks item",w:1},
+      {k:"quickbooks_on_hand",l:"QuickBooks",r:1},{k:"waiting_orders",l:"Waiting sales",r:1},
+      {k:"shopify_on_hand",l:"Shopify",r:1},{k:"new_shopify_on_hand",l:"Should be",r:1},
+      {k:"diff",l:"Change",r:1,f:x=>x.diff===""||x.diff===0?"":`<strong style="color:${x.diff<0?"var(--bad)":"var(--good)"}">${x.diff>0?"+":""}${x.diff}</strong>`},
+      {k:"cost_qb",l:"QB avg cost",r:1,f:x=>money(x.cost_qb)},{k:"cost_shopify",l:"Shopify cost",r:1,f:x=>money(x.cost_shopify)},
+      {k:"action",l:"Result",f:x=>`<span class="pill ${neg(x)?"bad":String(x.action).startsWith("updated")?"good":String(x.action)==="in step"?"":"warn"}">${esc(x.action)}</span>`},
+    ]});
+};
+
+pages.products = async (main) => {
+  const d = await api("/api/products");
+  main.innerHTML = `<h1>Products</h1><p class="sub">How each Shopify product is linked to a QuickBooks item (${n0(d.linked)} linked). To link a product to a different existing item, add a line to item_overrides.csv.</p><div id="t"></div>`;
+  const kind = a => a.startsWith("matched")||a==="already linked" ? "" : a.startsWith("will create")||a==="created" ? "brass" : "warn";
+  makeTable($("#t",main), { rows:d.rows, csvName:"products", sort:["shopify_title",1], emptyText:"No product report yet.",
+    chips:[["all","All"],["new","Created / to create",x=>/create/.test(x.action)],["matched","Matched to existing",x=>/matched|linked/.test(x.action)],["shared","Shares an item",x=>/share/.test(x.action)],["price","Price differs",x=>x.quickbooks_price!==""&&(+x.quickbooks_price).toFixed(2)!==(+x.shopify_price).toFixed(2)]],
+    columns:[
+      {k:"shopify_title",l:"Shopify product",w:1},{k:"shopify_type",l:"Type"},{k:"tracked",l:"Stock tracked"},
+      {k:"shopify_price",l:"Shopify price",r:1,f:x=>money(x.shopify_price)},
+      {k:"action",l:"Link",f:x=>`<span class="pill ${kind(x.action)}">${esc(x.action)}</span>`},
+      {k:"quickbooks_item",l:"QuickBooks item",w:1},{k:"quickbooks_type",l:"QB type",v:x=>String(x.quickbooks_type||"").replace(/^Item/,"")},
+      {k:"quickbooks_price",l:"QB price",r:1,f:x=>money(x.quickbooks_price)},{k:"income_account",l:"Income account"},
+    ]});
+};
+
+pages.customers = async (main) => {
+  const d = await api("/api/customers");
+  main.innerHTML = `<h1>Customers</h1><p class="sub">${n0(d.linked)} Shopify customers are linked to QuickBooks customers. Walk-in sales without a customer go to one shared customer.</p>
+    <h2>Best customers (all posted sales)</h2><div id="top"></div><h2>Matched or created in the latest run</h2><div id="t"></div>`;
+  makeTable($("#top",main), { rows:d.top, csvName:"top_customers", sort:["total",-1], search:false,
+    columns:[{k:"customer",l:"Customer"},{k:"orders",l:"Orders",r:1},{k:"total",l:"Total",r:1,f:x=>money(x.total)},{k:"last",l:"Last order",f:x=>esc(niceDate(x.last))}]});
+  makeTable($("#t",main), { rows:d.rows, csvName:"customers", emptyText:"No new customers in the latest run.",
+    chips:[["all","All"],["new","Created",x=>/create/.test(x.action)],["matched","Matched",x=>/matched/.test(x.action)]],
+    columns:[{k:"shopify_customer",l:"Shopify customer"},{k:"action",l:"Result"},{k:"quickbooks_name",l:"QuickBooks customer"}]});
+};
+
+pages.history = async (main, arg) => {
+  if(arg) return runDetail(main, arg);
+  const d = await api("/api/runs");
+  main.innerHTML = `<h1>Sync history</h1><p class="sub">Every time the Web Connector ran the sync. Click a run to see exactly what it did, or would do in preview.</p><div id="t"></div>`;
+  const c = x => x.counts||{};
+  makeTable($("#t",main), { rows:d.rows.map(r=>({...r,__id:r.id})), csvName:"sync_history", sort:["started",-1], emptyText:"No runs yet.",
+    chips:[["all","All"],["live","Live",x=>x.mode==="live"],["preview","Preview",x=>x.mode==="preview"],["problems","With problems",x=>x.status!=="ok"]],
+    columns:[
+      {k:"id",l:"Run",r:1,f:x=>`<a href="#history/${x.id}">${x.id}</a>`},
+      {k:"started",l:"Started",nw:1,f:x=>esc(when(x.started))},
+      {k:"mode",l:"Mode",f:x=>x.mode==="live"?"Live":'<span class="pill">Preview</span>',v:x=>x.mode},
+      {k:"status",l:"Result",f:x=>statusPill(x.status)},
+      {k:"seconds",l:"Took",r:1,f:x=>x.seconds==null?"":x.seconds<90?`${Math.round(x.seconds)} s`:`${Math.round(x.seconds/60)} min`},
+      {k:"r",l:"Receipts",r:1,v:x=>c(x).receipts||""},{k:"i",l:"Invoices",r:1,v:x=>c(x).invoices||""},
+      {k:"p",l:"Payments",r:1,v:x=>c(x).payments||""},{k:"rf",l:"Refunds",r:1,v:x=>c(x).refunds||""},
+      {k:"st",l:"Stock updates",r:1,v:x=>c(x).stock_pushed||""},
+      {k:"amt",l:"Sales posted",r:1,f:x=>c(x).sales_total?money(c(x).sales_total):"",sv:x=>c(x).sales_total||0},
+      {k:"e",l:"Errors",r:1,f:x=>x.errors.length?`<span style="color:var(--bad)">${x.errors.length}</span>`:"",sv:x=>x.errors.length},
+    ]});
+  $("#t",main).addEventListener("click", e=>{ const tr=e.target.closest("tbody tr"); if(tr&&!e.target.closest("a")&&tr.dataset.id) location.hash="#history/"+tr.dataset.id; });
+};
+
+async function runDetail(main, id){
+  const r = await api("/api/run?id="+encodeURIComponent(id));
+  if(r.missing){ main.innerHTML=`<a class="back" href="#history">All runs</a><p>That run isn't in the history.</p>`; return; }
+  const rep = r.report||{};
+  const tabs = [["activity","What it did",r.activity.length]].concat(
+      [["orders","Orders"],["items","Products"],["customers","Customers"],["inventory","Stock"]].filter(([k])=>rep[k]).map(([k,l])=>[k,l,rep[k].length]));
+  main.innerHTML = `<a class="back" href="#history">All runs</a>
+    <div class="toprow"><div><h1>Run ${r.id}</h1><p class="sub" style="margin:0">${r.mode==="live"?"Live":"Preview"} run started ${esc(when(r.started))}${r.seconds!=null?`, took ${r.seconds<90?Math.round(r.seconds)+" s":Math.round(r.seconds/60)+" min"}`:""}. ${statusPill(r.status)}</p></div></div>
+    ${r.errors.length?`<h2>Errors</h2><ul class="att">${r.errors.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`:""}
+    ${r.warnings.length?`<h2>Warnings</h2><ul class="att">${r.warnings.map(e=>`<li class="w">${esc(e)}</li>`).join("")}</ul>`:""}
+    ${r.summary.length?`<h2>Summary</h2><pre class="summary">${esc(r.summary.join("\n"))}</pre>`:""}
+    ${ADMIN?'<p class="muted">The full plan for each run (every order, product and stock line) is on the dashboard on the QuickBooks PC.</p>':""}
+    ${!ADMIN&&Object.keys(rep).length===0&&r.activity.length===0?'<p class="muted">Details for this run are no longer kept (only the latest 100 runs keep full detail).</p>':""}
+    <div class="subtabs" role="tablist">${tabs.map(([k,l,n],i)=>`<button role="tab" type="button" data-t="${k}" class="${i===0?"on":""}" aria-selected="${i===0}">${esc(l)} (${n})</button>`).join("")}</div>
+    <div id="tabbody"></div>`;
+  const show = k => {
+    main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); });
+    const host=$("#tabbody",main);
+    if(k==="activity") return makeTable(host,{rows:r.activity,csvName:`run${r.id}_activity`,emptyText:r.mode==="preview"?"A preview doesn't change anything. Use the other tabs to see what a live run would do.":"This run didn't need to change anything.",
+      chips:[["all","All"]].concat([...new Set(r.activity.map(a=>a.kind))].map(k=>[k,k[0].toUpperCase()+k.slice(1),x=>x.kind===k])),
+      columns:[{k:"at",l:"Time",nw:1,f:x=>esc(new Date(x.at*1000).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",second:"2-digit"}))},
+        {k:"kind",l:"What",nw:1,v:x=>x.kind[0].toUpperCase()+x.kind.slice(1)},{k:"ref",l:"QuickBooks no."},{k:"order_name",l:"Order"},{k:"name",l:"Name"},
+        {k:"amount",l:"Amount",r:1,f:x=>x.amount==null?"":(/stock/.test(x.kind)?n0(x.amount):money(x.amount))},{k:"note",l:"Details"}]});
+    const rows = rep[k]; const cols = Object.keys(rows[0]||{}).map(c=>({k:c,l:c.replace(/_/g," ").replace(/^./,m=>m.toUpperCase()),r:/total|tax|discount|price|cost|on hand|on_hand/.test(c)}));
+    makeTable(host,{rows,columns:cols,csvName:`run${r.id}_${k}`});
+  };
+  main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) show(b.dataset.t); });
+  show(tabs[0][0]);
+}
+
+pages.problems = async (main) => {
+  const p = await api("/api/problems");
+  main.innerHTML = `<h1>Problems</h1><p class="sub">Orders that couldn't be posted are retried automatically on every sync. Fix the cause in QuickBooks or config.ini and they'll go through on the next run.</p>
+    <h2>Orders that didn't post</h2><div id="f"></div>
+    <h2>Unpaid orders waiting for payment</h2><div id="w"></div>
+    <h2>From the latest run</h2>
+    ${p.last_errors.length?`<ul class="att">${p.last_errors.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`:""}
+    ${p.last_warnings.length?`<ul class="att">${p.last_warnings.map(e=>`<li class="w">${esc(e)}</li>`).join("")}</ul>`:""}
+    ${!p.last_errors.length&&!p.last_warnings.length?'<ul class="att"><li class="ok">No errors or warnings.</li></ul>':""}
+    ${p.last_run?`<p><a href="#history/${p.last_run.id}">Open the latest run</a></p>`:""}`;
+  const items = x => { const n=Object.values(x.lines||{}).reduce((a,b)=>a+b,0); return n ? `${n} ${n===1?"item":"items"} held back from stock push` : ""; };
+  makeTable($("#f",main),{rows:p.failed,search:false,csvName:"failed_orders",emptyText:"None. Every order went through.",
+    columns:[{k:"order_name",l:"Order"},{k:"error",l:"Why"},{k:"updated",l:"Last tried",f:x=>esc(when(x.updated))},{k:"lines",l:"Stock",v:items,nosort:1}]});
+  makeTable($("#w",main),{rows:p.waiting,search:false,csvName:"waiting_orders",emptyText:"None waiting.",
+    columns:[{k:"order_name",l:"Order"},{k:"updated",l:"Checked",f:x=>esc(when(x.updated))},{k:"lines",l:"Stock",v:items,nosort:1}]});
+};
+
+/* ---------- router & chrome ---------- */
+let timer=null;
+async function route(){
+  clearTimeout(timer);
+  const [page, arg] = (location.hash.slice(1)||"overview").split("/");
+  const fn = pages[page] || pages.overview;
+  document.querySelectorAll("nav a").forEach(a=>{ const on=a.dataset.page===(pages[page]?page:"overview"); a.classList.toggle("on",on); if(on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current"); });
+  const main=$("#main");
+  try{ await fn(main, arg); }
+  catch(e){ main.innerHTML = ADMIN
+      ? `<h1>Can't load this page</h1><p class="sub">Shopify didn't return the sync data. Reload the page; if it keeps happening, check that the app was deployed with Direct API access turned on (see SHOPIFY-PANEL-SETUP.txt).</p><p class="muted">${esc(e.message)}</p>`
+      : `<h1>Can't load this page</h1><p class="sub">The sync program isn't answering. Make sure it's running (2-Start-Sync-Window.bat), then reload this page.</p><p class="muted">${esc(e.message)}</p>`; }
+  refreshChrome();
+  if(page==="overview"||!pages[page]) timer=setTimeout(route, ADMIN ? 120000 : 30000);
+}
+async function refreshChrome(){
+  try{
+    const o = await api("/api/overview");
+    SETTINGS = o.settings||{};
+    const set=(id,n)=>{ const el=$(id); el.hidden=!n; el.textContent=n||""; };
+    set("#n-prob", o.problem_count); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
+    if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
+    const panel = o.settings && o.settings.panel_url ? `<br>Shopify admin panel: ${o.settings.panel_error?'<span style="color:var(--bad)">not updating</span>':o.settings.panel_published?"updated "+esc(ago(o.settings.panel_published)):"waiting for first sync"}` : "";
+    $("#foot").innerHTML = o.settings && !o.settings.error ? `${o.settings.mode==="live"?"Live":"Preview"} mode<br>Syncing orders since ${esc(niceDate(o.settings.start_date))}<br>Stock to Shopify: ${o.settings.push_inventory?"on":"off"}${panel}<br><a href="${esc(o.settings.admin_url)}" target="_blank" rel="noopener">Open Shopify admin</a>` : "Settings need attention";
+  }catch(e){ $("#foot").textContent="Sync program not reachable"; }
+}
+document.body.classList.toggle("embedded", ADMIN);
+window.addEventListener("hashchange", ()=>{ route(); $("#main").focus({preventScroll:true}); });
+refreshChrome().then(route);
+</script>
+</body>
+</html>
