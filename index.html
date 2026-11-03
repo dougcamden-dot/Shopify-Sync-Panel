@@ -602,8 +602,7 @@ function outsideAdminNotice(main){
     <p class="sub">This page is the QuickBooks Sync control panel. It shows your sync reports only when it's opened inside Shopify admin, where it can sign in with your Shopify login. Opened on its own like this, it can't read anything.</p>
     <p><a class="btn" href="https://admin.shopify.com/store/${esc(store)}/apps" target="_top">Go to Apps in Shopify admin</a></p>
     <p class="muted">Then click QuickBooks Sync. If it opens in a new tab and brings you back here, the app isn't switched on inside Shopify admin yet: run 7-Deploy-Shopify-Panel-Settings.bat on the QuickBooks PC (step 7 of SHOPIFY-PANEL-SETUP.txt).</p>`;
-  $("#foot").textContent = "Not inside Shopify admin";
-  document.querySelector("nav").querySelectorAll("a").forEach(a=>a.hidden=true);
+  document.querySelector("nav").style.display = "none";
 }
 async function route(){
   if(OUTSIDE_ADMIN) return outsideAdminNotice($("#main"));
