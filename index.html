@@ -145,6 +145,48 @@ body.embedded main{padding:22px 26px 50px}
   .fig{flex-basis:45%;border-bottom:1px solid var(--rule)}
 }
 @media (prefers-reduced-motion:no-preference){ .tag .bar i{transition:width .6s ease} }
+
+/* purchasing */
+nav a[hidden],[hidden]{display:none!important}
+body.embedded .app{grid-template-rows:auto 1fr}
+body.embedded nav{align-items:center;align-content:flex-start;row-gap:0}
+body.embedded nav a{padding:7px 10px;font-size:14px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{text-decoration:none;color:var(--ink);display:inline-block}
+.btn.primary{background:var(--brass);border-color:var(--brass-deep);color:#fff}
+.btn.primary:hover{background:var(--brass-deep)}
+.btn.danger{border-color:var(--bad);color:var(--bad)} .btn.danger:hover{background:var(--bad);color:#fff}
+.btn:disabled{opacity:.55;cursor:default}
+.link{border:0;background:none;color:var(--brass-deep);text-decoration:underline;cursor:pointer;padding:0}
+.banner.good{border-color:var(--good);background:var(--good-pale)}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px 18px;max-width:900px;margin:0 0 18px}
+.form label{display:flex;flex-direction:column;gap:3px;font-size:13.5px;color:var(--steel)}
+.form .wide{grid-column:1/-1}
+.form input,.form select,.form textarea,.tools select,label>input{border:1px solid var(--rule);background:var(--panel);padding:6px 9px;border-radius:5px;color:var(--ink);font:inherit}
+.form label.check,label.check{flex-direction:row;align-items:center;gap:6px;color:var(--ink)}
+table.edit input{border:1px solid var(--rule);border-radius:4px;padding:3px 6px;background:#fff;width:100%;min-width:90px}
+table.edit input.n{width:84px;min-width:0;text-align:right}
+table.edit th{cursor:default} table.edit tfoot td{background:#FAFAF8;border-top:1px solid var(--rule)}
+tr.muted-row td{color:var(--steel)}
+tr.hit td{background:var(--good-pale)}
+.picker{position:relative;max-width:520px;margin:0 0 10px}
+.picker input{width:100%;border:1px solid var(--rule);background:var(--panel);padding:7px 10px;border-radius:5px}
+.picks{position:absolute;z-index:5;left:0;right:0;top:100%;margin:2px 0 0;padding:4px 0;list-style:none;background:var(--panel);border:1px solid var(--rule);border-radius:5px;box-shadow:0 6px 18px rgba(30,43,51,.12);max-height:320px;overflow:auto}
+.picks button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 10px;cursor:pointer}
+.picks button:hover,.picks button:focus{background:var(--brass-pale)}
+#printarea{display:none}
+@media print{
+  body>*:not(#printarea){display:none!important} #printarea{display:block} body{background:#fff}
+  .po-print{font:12pt/1.4 var(--body)} .po-print table{width:100%;border-collapse:collapse;margin:12px 0} .po-print td,.po-print th{border-bottom:1px solid #ccc;padding:5px;position:static;background:none;text-align:left}
+  .po-print .r{text-align:right} .po-print .meta td{vertical-align:top;border:0;width:33%}
+  .labels.roll{display:block} .labels.roll .label{width:2.25in;height:1.25in;page-break-after:always;padding:.06in .1in}
+  .labels.sheet{display:grid;grid-template-columns:repeat(3,2.625in);column-gap:.125in;grid-auto-rows:1in;padding:.5in .19in 0}
+  .labels.sheet .label{height:1in;padding:.05in .12in;overflow:hidden} .labels.sheet .label:nth-child(30n){page-break-after:always}
+  .label{display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;font-family:Arial,sans-serif;color:#000;overflow:hidden}
+  .label .lt{font-size:8pt;line-height:1.1;max-height:2.2em;overflow:hidden} .label .lp{font-size:12pt;font-weight:bold}
+  .label .bc{width:100%;height:.38in;display:block} .label .lc{font-size:7pt;text-align:center;letter-spacing:.05em}
+  @page{margin:0}
+}
 </style>
 </head>
 <body>
@@ -158,6 +200,11 @@ body.embedded main{padding:22px 26px 50px}
     <a href="#products" data-page="products">Products</a>
     <a href="#customers" data-page="customers">Customers</a>
     <a href="#history" data-page="history">Sync history</a>
+    <a href="#pos" data-page="pos" class="purch" hidden>Purchase orders</a>
+    <a href="#reorder" data-page="reorder" class="purch" hidden>Reorder</a>
+    <a href="#counts" data-page="counts" class="purch" hidden>Stock counts</a>
+    <a href="#labels" data-page="labels" class="purch" hidden>Labels</a>
+    <a href="#value" data-page="value" class="purch" hidden>Stock value</a>
     <a href="#problems" data-page="problems">Problems <span class="count" id="n-prob" hidden></span></a>
     <div class="foot" id="foot">Loading…</div>
   </nav>
@@ -604,14 +651,514 @@ function outsideAdminNotice(main){
     <p class="muted">Then click QuickBooks Sync. If it opens in a new tab and brings you back here, the app isn't switched on inside Shopify admin yet: run 7-Deploy-Shopify-Panel-Settings.bat on the QuickBooks PC (step 7 of SHOPIFY-PANEL-SETUP.txt).</p>`;
   document.querySelector("nav").style.display = "none";
 }
+/* ======================================================================
+   PURCHASING (Shopify admin panel only)
+   Suppliers, purchase orders, receiving, reorder suggestions, stock counts,
+   barcode labels and stock value. Records live in Shopify as this app's own
+   metaobjects; the sync program posts receipts and counts to QuickBooks.
+   ====================================================================== */
+const PURCH = { cat:null, catAt:0, suppliers:null, pos:null, counts:null };
+const T_SUP = "$app:qb_supplier", T_PO = "$app:qb_purchase_order", T_CNT = "$app:qb_stock_count";
+const purchOn = () => ADMIN && SETTINGS.purchasing && SETTINGS.purchasing.enabled;
+const legacy = gid => String(gid||"").split("/").pop();
+const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+const int = v => { const n = parseInt(v,10); return isFinite(n) ? n : 0; };
+const nowIso = () => new Date().toISOString();
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2));
+
+async function gqlv(query, variables){
+  const r = await fetch("shopify:admin/api/2026-10/graphql.json",{method:"POST",body:JSON.stringify({query, variables})});
+  const j = await r.json();
+  if(j.errors) throw new Error(j.errors.map(e=>e.message).join("; "));
+  return j.data;
+}
+function userErrs(payload){ const e=(payload&&payload.userErrors)||[]; if(e.length) throw new Error(e.map(x=>x.message).join("; ")); return payload; }
+
+/* ---------- catalog (all products with stock, cost, barcode, reorder settings) ---------- */
+const CATALOG_Q = `query PanelCatalog($cursor: String, $loc: ID!) {
+  productVariants(first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes { id title sku price
+      product { id title productType status }
+      barcodes(first: 1) { nodes { value } }
+      inventoryItem { id tracked unitCost { amount }
+        inventoryLevel(locationId: $loc) { quantities(names: ["on_hand", "available"]) { name quantity } } }
+      reorder: metafield(namespace: "$app", key: "reorder") { value } } } }`;
+async function loadCatalog(force){
+  if(PURCH.cat && !force && Date.now()-PURCH.catAt < 300000) return PURCH.cat;
+  const loc = SETTINGS.location_id; if(!loc) throw new Error("Run one sync first so the panel knows your store location.");
+  const list=[]; let cursor=null;
+  do { const d=(await gqlv(CATALOG_Q,{cursor,loc})).productVariants;
+    d.nodes.forEach(v=>{ const inv=v.inventoryItem||{}; const q={}; ((inv.inventoryLevel||{}).quantities||[]).forEach(x=>q[x.name]=x.quantity);
+      let rule={}; try{ rule = v.reorder && v.reorder.value ? JSON.parse(v.reorder.value) : {}; }catch(e){}
+      const vt = v.title && v.title!=="Default Title" ? ` - ${v.title}` : "";
+      list.push({ id:v.id, productId:v.product.id, title:v.product.title+vt, type:v.product.productType||"", status:v.product.status,
+        sku:v.sku||"", barcode:((v.barcodes||{}).nodes||[])[0]?.value||"", price:num(v.price), invId:inv.id, tracked:!!inv.tracked,
+        cost:num((inv.unitCost||{}).amount), onHand: q.on_hand ?? 0, available: q.available ?? 0, rule }); });
+    cursor = d.pageInfo.hasNextPage ? d.pageInfo.endCursor : null;
+  } while(cursor);
+  PURCH.cat = { list, byId:Object.fromEntries(list.map(v=>[v.id,v])), byCode:{} };
+  list.forEach(v=>{ [v.barcode, v.sku, (v.rule||{}).sku].filter(Boolean).forEach(c=>PURCH.cat.byCode[String(c).toLowerCase()]=v); });
+  PURCH.catAt = Date.now(); return PURCH.cat;
+}
+function findByCode(code){
+  const c=String(code||"").trim().toLowerCase(); if(!c) return null;
+  const cat=PURCH.cat; if(cat.byCode[c]) return cat.byCode[c];
+  const gen = c.match(/^29(\d+)$/); if(gen){ const v=cat.list.find(x=>legacy(x.id)===gen[1]); if(v) return v; }
+  return cat.list.find(v=>v.title.toLowerCase()===c) || null;
+}
+
+/* ---------- metaobjects ---------- */
+const META_LIST = `query PanelMeta($type: String!, $cursor: String) { metaobjects(type: $type, first: 50, after: $cursor) {
+  pageInfo { hasNextPage endCursor } nodes { id handle updatedAt fields { key value } } } }`;
+const META_CREATE = `mutation PanelMetaCreate($metaobject: MetaobjectCreateInput!) { metaobjectCreate(metaobject: $metaobject) {
+  metaobject { id handle updatedAt fields { key value } } userErrors { field message } } }`;
+const META_UPDATE = `mutation PanelMetaUpdate($id: ID!, $metaobject: MetaobjectUpdateInput!) { metaobjectUpdate(id: $id, metaobject: $metaobject) {
+  metaobject { id handle updatedAt fields { key value } } userErrors { field message } } }`;
+function parseMeta(n){ const f={}; (n.fields||[]).forEach(x=>f[x.key]=x.value);
+  const j=k=>{ try{ return f[k]?JSON.parse(f[k]):{}; }catch(e){ return {}; } };
+  return { id:n.id, handle:n.handle, updatedAt:n.updatedAt, name:f.name||"", status:f.status||"", supplier:f.supplier||"", data:j("data"), qb:j("qb") }; }
+async function listMeta(type){
+  const out=[]; let cursor=null;
+  do { const d=(await gqlv(META_LIST,{type,cursor})).metaobjects; d.nodes.forEach(n=>out.push(parseMeta(n)));
+    cursor=d.pageInfo.hasNextPage?d.pageInfo.endCursor:null; } while(cursor);
+  return out;
+}
+function metaFields(rec, keys){ return keys.map(k=>({key:k, value: (k==="data"||k==="qb") ? JSON.stringify(rec[k]||{}) : String(rec[k]??"")})); }
+async function saveMeta(type, rec, keys){
+  if(rec.id){ const r=userErrs((await gqlv(META_UPDATE,{id:rec.id, metaobject:{fields:metaFields(rec,keys)}})).metaobjectUpdate); return parseMeta(r.metaobject); }
+  const r=userErrs((await gqlv(META_CREATE,{metaobject:{type, handle:rec.handle, fields:metaFields(rec,keys)}})).metaobjectCreate);
+  return parseMeta(r.metaobject);
+}
+async function loadSuppliers(force){ if(!PURCH.suppliers||force) PURCH.suppliers=(await listMeta(T_SUP)).sort((a,b)=>a.name.localeCompare(b.name)); return PURCH.suppliers; }
+async function loadPOs(force){ if(!PURCH.pos||force) PURCH.pos=(await listMeta(T_PO)).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true})); return PURCH.pos; }
+async function loadCounts(force){ if(!PURCH.counts||force) PURCH.counts=(await listMeta(T_CNT)).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true})); return PURCH.counts; }
+function nextNumber(list, prefix){ let n=1000; list.forEach(r=>{ const m=String(r.name).match(/(\d+)$/); if(m) n=Math.max(n,int(m[1])); }); return `${prefix}-${n+1}`; }
+function onOrder(){ const m={}; (PURCH.pos||[]).forEach(p=>{ if(p.status==="ordered"||p.status==="partial") (p.data.lines||[]).forEach(l=>{ m[l.variant_id]=(m[l.variant_id]||0)+Math.max(0,int(l.qty)-int(l.received)); }); }); return m; }
+async function loadVelocity(){ try{ await adminStatus(); const keys=(AD.status.index||{}).velocity||[]; await loadKeys(keys); return keys.length?AD.parts[keys[0]]:{}; }catch(e){ return {}; } }
+
+/* ---------- small UI helpers ---------- */
+function setBusy(btn, on, label){ if(!btn) return; if(on){ btn.dataset.l=btn.textContent; btn.textContent=label||"Working…"; btn.disabled=true; } else { btn.textContent=btn.dataset.l||btn.textContent; btn.disabled=false; } }
+function flash(host, msg, kind){ const el=document.createElement("div"); el.className="banner"+(kind==="bad"?" bad":kind==="good"?" good":""); el.setAttribute("role", kind==="bad"?"alert":"status"); el.textContent=msg; host.prepend(el); setTimeout(()=>el.remove(), kind==="bad"?15000:6000); }
+const poStatus = s => ({draft:["","Draft"],ordered:["brass","Ordered"],partial:["warn","Partly received"],received:["good","Received"],cancelled:["bad","Cancelled"]}[s]||["",s]);
+const pill = ([c,l]) => `<span class="pill ${c}">${esc(l)}</span>`;
+function qbState(p){ const r=(p.data.receipts||[]); if(!r.length) return ""; const done=Object.keys((p.qb||{}).receipts||{}).length;
+  const errs=Object.keys((p.qb||{}).errors||{}).length; if(errs) return '<span class="pill bad">QuickBooks problem</span>';
+  return done>=r.length ? '<span class="pill good">In QuickBooks</span>' : '<span class="pill warn">Waiting for sync</span>'; }
+function productPicker(onPick, placeholder){
+  const wrap=document.createElement("div"); wrap.className="picker";
+  wrap.innerHTML=`<input type="search" placeholder="${esc(placeholder||"Add a product: type a name, or scan a barcode")}" aria-label="Find a product" autocomplete="off"><ul class="picks" hidden></ul>`;
+  const inp=$("input",wrap), ul=$("ul",wrap);
+  const show=()=>{ const q=inp.value.trim().toLowerCase(); if(q.length<2){ ul.hidden=true; return; }
+    const hits=PURCH.cat.list.filter(v=>v.title.toLowerCase().includes(q)||v.barcode.toLowerCase()===q||v.sku.toLowerCase()===q).slice(0,12);
+    ul.innerHTML=hits.map(v=>`<li><button type="button" data-id="${esc(v.id)}">${esc(v.title)} <span class="muted">${v.tracked?`${v.onHand} on hand`:"not stock-tracked"}</span></button></li>`).join("")||'<li class="muted" style="padding:6px 10px">No match</li>'; ul.hidden=false; };
+  inp.addEventListener("input", show);
+  inp.addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); const v=findByCode(inp.value); if(v){ onPick(v); inp.value=""; ul.hidden=true; } else show(); } });
+  ul.addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b) return; onPick(PURCH.cat.byId[b.dataset.id]); inp.value=""; ul.hidden=true; inp.focus(); });
+  return wrap;
+}
+
+/* ---------- Suppliers ---------- */
+pages.suppliers = async (main, arg) => {
+  await loadSuppliers(true);
+  const sup = arg ? (PURCH.suppliers.find(s=>legacy(s.id)===arg) || {name:"",data:{}}) : null;
+  if(sup || arg==="new"){
+    const s = sup || {name:"",data:{}}; const d=s.data;
+    main.innerHTML=`<a class="back" href="#suppliers">All suppliers</a><h1>${s.id?esc(s.name):"New supplier"}</h1>
+      <form class="form" id="f">
+        <label>Name<input name="name" required maxlength="41" value="${esc(s.name)}"></label>
+        <label>Contact person<input name="contact" value="${esc(d.contact)}"></label>
+        <label>Email<input name="email" type="email" value="${esc(d.email)}"></label>
+        <label>Phone<input name="phone" value="${esc(d.phone)}"></label>
+        <label>Your account number with them<input name="account" value="${esc(d.account)}"></label>
+        <label>Usual delivery time (days)<input name="lead_days" type="number" min="0" value="${esc(d.lead_days??7)}"></label>
+        <label class="wide">Notes<textarea name="notes" rows="3">${esc(d.notes)}</textarea></label>
+        <p class="muted wide">The name must match the supplier (vendor) name in QuickBooks; it's created there if it doesn't exist yet.</p>
+        <div class="actions wide"><button class="btn primary" type="submit">Save supplier</button></div></form>`;
+    $("#f",main).addEventListener("submit", async e=>{ e.preventDefault(); const fd=new FormData(e.target); const btn=e.submitter; setBusy(btn,true,"Saving…");
+      try{ const name=fd.get("name").trim();
+        if(PURCH.suppliers.some(x=>x.name.toLowerCase()===name.toLowerCase() && x.id!==s.id)) throw new Error("A supplier with that name already exists.");
+        const rec={...s, name, data:{contact:fd.get("contact"),email:fd.get("email"),phone:fd.get("phone"),account:fd.get("account"),lead_days:int(fd.get("lead_days")),notes:fd.get("notes")}};
+        if(!rec.id) rec.handle="sup-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40)+"-"+Date.now().toString(36);
+        const saved=await saveMeta(T_SUP, rec, ["name","data"]); PURCH.suppliers=null; flashNext("Supplier saved.","good"); location.hash="#suppliers/"+legacy(saved.id);
+      }catch(err){ flash(main, "Couldn't save: "+err.message, "bad"); } finally{ setBusy(btn,false); } });
+    return;
+  }
+  main.innerHTML=`<div class="toprow"><div><h1>Suppliers</h1><p class="sub">Companies you buy stock from.</p></div><a class="btn primary" href="#suppliers/new">Add supplier</a></div><div id="t"></div>`;
+  makeTable($("#t",main),{rows:PURCH.suppliers.map(s=>({...s,__id:s.id})), csvName:"suppliers", sort:["name",1], emptyText:"No suppliers yet. Add the companies you buy from.",
+    columns:[{k:"name",l:"Supplier",f:x=>`<a href="#suppliers/${esc(legacy(x.id))}">${esc(x.name)}</a>`,v:x=>x.name},
+      {k:"contact",l:"Contact",v:x=>x.data.contact||""},{k:"email",l:"Email",v:x=>x.data.email||""},{k:"phone",l:"Phone",v:x=>x.data.phone||""},
+      {k:"lead",l:"Delivery days",r:1,v:x=>x.data.lead_days??""}]});
+};
+
+/* ---------- Purchase orders list ---------- */
+pages.pos = async (main) => {
+  const [pos] = await Promise.all([loadPOs(true), loadCatalog()]);
+  const rows = pos.map(p=>{ const lines=p.data.lines||[]; const ordered=lines.reduce((a,l)=>a+int(l.qty),0), got=lines.reduce((a,l)=>a+int(l.received),0);
+    return {...p, __id:p.id, items:lines.length, total:lines.reduce((a,l)=>a+int(l.qty)*num(l.cost),0), pct: ordered?Math.round(got/ordered*100):0}; });
+  main.innerHTML=`<div class="toprow"><div><h1>Purchase orders</h1><p class="sub">Order stock from suppliers, then receive it here when it arrives. Shopify stock goes up when you receive; the next sync enters the purchase in QuickBooks.</p></div>
+    <div class="actions"><a class="btn" href="#suppliers">Suppliers</a> <a class="btn primary" href="#po/new">New purchase order</a></div></div><div id="t"></div>`;
+  makeTable($("#t",main),{rows, csvName:"purchase_orders", sort:["name",-1], emptyText:"No purchase orders yet.",
+    chips:[["open","Open",x=>["draft","ordered","partial"].includes(x.status)],["received","Received",x=>x.status==="received"],["all","All"]],
+    columns:[{k:"name",l:"PO",f:x=>`<a href="#po/${esc(legacy(x.id))}">${esc(x.name)}</a>`,v:x=>x.name,sv:x=>int(String(x.name).replace(/\D/g,""))},
+      {k:"supplier",l:"Supplier"},{k:"status",l:"Status",f:x=>pill(poStatus(x.status))},
+      {k:"created",l:"Created",nw:1,v:x=>shortDate((x.data.created_at||"").slice(0,10)),sv:x=>x.data.created_at||""},
+      {k:"expected",l:"Expected",nw:1,v:x=>x.data.expected?shortDate(x.data.expected):""},
+      {k:"items",l:"Lines",r:1},{k:"total",l:"Cost",r:1,f:x=>money(x.total)},{k:"pct",l:"Received",r:1,f:x=>x.status==="draft"?"":x.pct+"%"},
+      {k:"qb",l:"QuickBooks",f:qbState,nosort:1}]});
+};
+
+/* ---------- Purchase order editor ---------- */
+pages.po = async (main, arg) => {
+  const [pos, sups] = await Promise.all([loadPOs(true), loadSuppliers(true), loadCatalog()]);
+  let po = arg==="new" ? null : pos.find(p=>legacy(p.id)===arg);
+  if(!po && arg!=="new"){ main.innerHTML=`<a class="back" href="#pos">All purchase orders</a><p>That purchase order wasn't found.</p>`; return; }
+  const draftSeed = JSON.parse(sessionStorage.getItem("po_seed")||"null"); sessionStorage.removeItem("po_seed");
+  if(!po) po = { name: nextNumber(pos,"PO"), status:"draft", supplier: draftSeed?.supplier||"", data:{ created_at: nowIso(), lines: draftSeed?.lines||[], receipts:[] }, qb:{} };
+  const editable = po.status==="draft"||po.status==="ordered";
+  const render = () => {
+    const d=po.data, lines=d.lines||[]; const total=lines.reduce((a,l)=>a+int(l.qty)*num(l.cost),0);
+    main.innerHTML=`<a class="back" href="#pos">All purchase orders</a>
+      <div class="toprow"><div><h1>${esc(po.name)} ${pill(poStatus(po.status))}</h1><p class="sub" style="margin:0">${po.id?`Created ${esc(shortDate((d.created_at||"").slice(0,10)))}`:"Not saved yet"}${d.ordered_at?`, ordered ${esc(shortDate(d.ordered_at.slice(0,10)))}`:""}</p></div>
+      <div class="actions">${po.id?`<button class="btn" data-a="print">Print / PDF</button>`:""}${po.id&&po.status!=="draft"&&po.status!=="cancelled"&&po.status!=="received"?`<a class="btn primary" href="#receive/${esc(legacy(po.id))}">Receive delivery</a>`:""}</div></div>
+      <form class="form" id="f">
+        <label>Supplier<select name="supplier" ${editable?"":"disabled"} required><option value="">Choose…</option>${sups.map(s=>`<option ${s.name===po.supplier?"selected":""}>${esc(s.name)}</option>`).join("")}</select></label>
+        <label>Expected delivery<input type="date" name="expected" value="${esc(d.expected||"")}" ${editable?"":"disabled"}></label>
+        <label class="wide">Notes for the supplier<textarea name="notes" rows="2" ${editable?"":"disabled"}>${esc(d.notes||"")}</textarea></label>
+      </form>
+      ${sups.length?"":`<p class="banner">Add a supplier first: <a href="#suppliers/new">add supplier</a>.</p>`}
+      <h2>Items</h2><div id="pick"></div>
+      <div class="tablewrap"><table class="edit"><thead><tr><th>Product</th><th>Supplier's code</th><th class="r">On hand</th><th class="r">Order qty</th><th class="r">Unit cost</th><th class="r">Line total</th><th class="r">Received</th><th></th></tr></thead><tbody>
+      ${lines.map((l,i)=>{ const v=PURCH.cat.byId[l.variant_id]; return `<tr data-i="${i}"><td>${esc(l.title)}</td>
+        <td><input data-k="supplier_sku" value="${esc(l.supplier_sku||"")}" ${editable?"":"disabled"} aria-label="Supplier's code"></td>
+        <td class="r">${v?esc(v.onHand):""}</td>
+        <td class="r"><input data-k="qty" type="number" min="0" step="1" value="${esc(l.qty)}" ${editable?"":"disabled"} class="n" aria-label="Order quantity"></td>
+        <td class="r"><input data-k="cost" type="number" min="0" step="0.01" value="${esc(num(l.cost).toFixed(2))}" ${editable?"":"disabled"} class="n" aria-label="Unit cost"></td>
+        <td class="r">${money(int(l.qty)*num(l.cost))}</td><td class="r">${int(l.received)||""}</td>
+        <td>${editable&&!int(l.received)?`<button type="button" class="link" data-a="del" aria-label="Remove ${esc(l.title)}">Remove</button>`:""}</td></tr>`; }).join("") || '<tr><td colspan="8" class="empty">No items yet. Add products above, or start from Reorder suggestions.</td></tr>'}
+      </tbody><tfoot><tr><td colspan="5" class="r"><strong>Total</strong></td><td class="r"><strong>${money(total)}</strong></td><td colspan="2"></td></tr></tfoot></table></div>
+      <div class="actions" style="margin-top:14px">
+        ${editable?`<button class="btn" data-a="save">Save</button>`:""}
+        ${po.status==="draft"?`<button class="btn primary" data-a="order">Mark as ordered</button>`:""}
+        ${po.id&&po.status!=="cancelled"&&!(d.receipts||[]).length?`<button class="btn danger" data-a="cancel">Cancel this order</button>`:""}
+        ${po.id&&po.supplier?mailLink(po):""}
+      </div>
+      ${(d.receipts||[]).length?`<h2>Deliveries received</h2><div id="rc"></div>`:""}`;
+    if(editable) $("#pick",main).appendChild(productPicker(v=>{ collect(); if(!v.tracked) flash(main,`${v.title} isn't stock-tracked in Shopify; receiving it won't change stock.`);
+      const ex=po.data.lines.find(l=>l.variant_id===v.id); if(ex) ex.qty=int(ex.qty)+1; else po.data.lines.push({variant_id:v.id, inventory_item_id:v.invId, title:v.title, supplier_sku:(v.rule||{}).sku||"", qty:1, cost:num((v.rule||{}).cost)||v.cost, received:0}); render(); }));
+    if((d.receipts||[]).length) makeTable($("#rc",main),{rows:d.receipts.map(r=>({...r,__id:r.id})), search:false, csvName:po.name+"_deliveries",
+      columns:[{k:"at",l:"Received",nw:1,f:x=>esc(new Date(x.at).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))},
+        {k:"units",l:"Units",r:1,v:x=>(x.lines||[]).reduce((a,l)=>a+int(l.qty),0)},{k:"cost",l:"Cost",r:1,f:x=>money((x.lines||[]).reduce((a,l)=>a+int(l.qty)*num(l.cost),0))},
+        {k:"note",l:"Note"},{k:"qb",l:"QuickBooks",f:x=>{ const q=((po.qb||{}).receipts||{})[x.id], e=((po.qb||{}).errors||{})[x.id];
+          return e?`<span class="pill bad">${esc(e)}</span>`:q?`<span class="pill good">${esc(q.type==="item_receipt"?"Item receipt":"Bill")} ${esc(q.ref)}</span>`:'<span class="pill warn">Waiting for sync</span>'; },nosort:1},
+        {k:"labels",l:"",nosort:1,f:x=>`<a href="#labels/${esc(legacy(po.id))}~${esc(x.id)}">Print labels</a>`}]});
+  };
+  const collect = () => { const f=$("#f",main); if(!f) return; po.supplier=f.supplier.value; po.data.expected=f.expected.value; po.data.notes=f.notes.value;
+    main.querySelectorAll("tr[data-i]").forEach(tr=>{ const l=po.data.lines[int(tr.dataset.i)]; tr.querySelectorAll("input[data-k]").forEach(inp=>{ l[inp.dataset.k]= inp.dataset.k==="supplier_sku"?inp.value:(inp.dataset.k==="qty"?int(inp.value):num(inp.value)); }); }); };
+  const save = async (status) => { collect();
+    if(!po.supplier) throw new Error("Choose a supplier.");
+    po.data.lines = po.data.lines.filter(l=>int(l.qty)>0 || int(l.received)>0);
+    if(status==="ordered" && !po.data.lines.length) throw new Error("Add at least one item.");
+    if(status){ po.status=status; if(status==="ordered") po.data.ordered_at=nowIso(); if(status==="cancelled") po.data.cancelled_at=nowIso(); }
+    if(!po.id) po.handle = po.name.toLowerCase();
+    const saved=await saveMeta(T_PO, po, ["name","status","supplier","data"]); po={...po, ...saved}; PURCH.pos=null; return po; };
+  main.addEventListener("input", e=>{ if(e.target.matches("tr[data-i] input")){ const tr=e.target.closest("tr"); const l=po.data.lines[int(tr.dataset.i)];
+    const q=int($('input[data-k="qty"]',tr).value), c=num($('input[data-k="cost"]',tr).value); tr.children[5].textContent=money(q*c); } });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return; const a=b.dataset.a;
+    if(a==="del"){ collect(); po.data.lines.splice(int(b.closest("tr").dataset.i),1); render(); return; }
+    if(a==="print"){ collect(); printPO(po); return; }
+    if(a==="cancel" && !confirmInline(b,"Click again to cancel this order")) return;
+    setBusy(b,true,"Saving…");
+    try{ await save(a==="order"?"ordered":a==="cancel"?"cancelled":null); flash(main, a==="order"?"Marked as ordered.":a==="cancel"?"Order cancelled.":"Saved.","good");
+      if(location.hash!=="#po/"+legacy(po.id)) { history.replaceState(null,"","#po/"+legacy(po.id)); } render();
+    }catch(err){ flash(main,"Couldn't save: "+err.message,"bad"); setBusy(b,false); } });
+  render();
+};
+function confirmInline(btn, msg){ if(btn.dataset.sure) return true; btn.dataset.sure="1"; btn.dataset.l=btn.textContent; btn.textContent=msg; setTimeout(()=>{ delete btn.dataset.sure; btn.textContent=btn.dataset.l; },4000); return false; }
+function mailLink(po){ const s=(PURCH.suppliers||[]).find(x=>x.name===po.supplier); const to=s&&s.data.email; if(!to) return "";
+  const body=`Purchase order ${po.name} from Doug's Lock & Key Service\n\n`+(po.data.lines||[]).map(l=>`${int(l.qty)} x ${l.supplier_sku?l.supplier_sku+" ":""}${l.title} @ ${num(l.cost).toFixed(2)}`).join("\n")+(po.data.notes?`\n\n${po.data.notes}`:"")+(s.data.account?`\n\nAccount: ${s.data.account}`:"");
+  return `<a class="btn" target="_blank" rel="noopener" href="mailto:${esc(to)}?subject=${encodeURIComponent("Purchase order "+po.name)}&body=${encodeURIComponent(body)}">Email supplier</a>`; }
+function printPO(po){
+  const s=(PURCH.suppliers||[]).find(x=>x.name===po.supplier)||{data:{}}; const lines=po.data.lines||[];
+  printArea(`<div class="po-print"><h1>Purchase order ${esc(po.name)}</h1>
+    <table class="meta"><tr><td><strong>From</strong><br>Doug's Lock &amp; Key Service<br>211 N Market</td><td><strong>To</strong><br>${esc(po.supplier)}${s.data.contact?"<br>"+esc(s.data.contact):""}${s.data.phone?"<br>"+esc(s.data.phone):""}${s.data.email?"<br>"+esc(s.data.email):""}</td>
+    <td><strong>Date</strong> ${esc(new Date().toLocaleDateString("en-US"))}${po.data.expected?`<br><strong>Needed by</strong> ${esc(niceDate(po.data.expected))}`:""}${s.data.account?`<br><strong>Our account</strong> ${esc(s.data.account)}`:""}</td></tr></table>
+    <table class="lines"><thead><tr><th>Supplier code</th><th>Item</th><th class="r">Qty</th><th class="r">Unit cost</th><th class="r">Total</th></tr></thead><tbody>
+    ${lines.map(l=>`<tr><td>${esc(l.supplier_sku||"")}</td><td>${esc(l.title)}</td><td class="r">${int(l.qty)}</td><td class="r">${money(l.cost)}</td><td class="r">${money(int(l.qty)*num(l.cost))}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td colspan="4" class="r"><strong>Total</strong></td><td class="r"><strong>${money(lines.reduce((a,l)=>a+int(l.qty)*num(l.cost),0))}</strong></td></tr></tfoot></table>
+    ${po.data.notes?`<p>${esc(po.data.notes)}</p>`:""}</div>`);
+}
+function printArea(html){ let a=$("#printarea"); if(!a){ a=document.createElement("div"); a.id="printarea"; document.body.appendChild(a); } a.innerHTML=html; setTimeout(()=>window.print(),50); }
+
+/* ---------- Receiving ---------- */
+const ADJUST = `mutation PanelAdjust($input: InventoryAdjustQuantitiesInput!, $key: String!) {
+  inventoryAdjustQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message code } } }`;
+const SET_COST = `mutation PanelCost($id: ID!, $input: InventoryItemInput!) { inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { field message } } }`;
+pages.receive = async (main, arg) => {
+  const [pos] = await Promise.all([loadPOs(true), loadCatalog(true)]);
+  let po = pos.find(p=>legacy(p.id)===arg);
+  if(!po){ main.innerHTML=`<a class="back" href="#pos">All purchase orders</a><p>That purchase order wasn't found.</p>`; return; }
+  const pendingKey="receipt_"+po.id; let pending=JSON.parse(localStorage.getItem(pendingKey)||"null");
+  const lines=(po.data.lines||[]).map(l=>({...l, now: Math.max(0,int(l.qty)-int(l.received)), newCost:num(l.cost)}));
+  const render=()=>{
+    main.innerHTML=`<a class="back" href="#po/${esc(legacy(po.id))}">Back to ${esc(po.name)}</a>
+      <h1>Receive ${esc(po.name)} from ${esc(po.supplier)}</h1>
+      <p class="sub">Check the delivery, adjust what actually arrived, then click Receive. Shopify stock goes up immediately${SETTINGS.purchasing.cost_method==="average"?" and the cost per item is averaged with stock on hand":" and the cost per item is set to this delivery's cost"}.</p>
+      ${pending?`<div class="banner bad">A delivery was received in Shopify but not saved on this purchase order. <button class="btn" data-a="finish">Finish saving it</button></div>`:""}
+      <div class="tools"><input id="scan" type="search" placeholder="Scan a barcode to count it in" aria-label="Scan to receive"><span class="spacer"></span>
+        <button class="btn" data-a="all">Fill remaining</button> <button class="btn" data-a="none">Clear all</button></div>
+      <div class="tablewrap"><table class="edit"><thead><tr><th>Product</th><th class="r">Ordered</th><th class="r">Already in</th><th class="r">Receiving now</th><th class="r">Unit cost</th><th class="r">On hand</th></tr></thead><tbody>
+      ${lines.map((l,i)=>{ const v=PURCH.cat.byId[l.variant_id]; return `<tr data-i="${i}" class="${l.now>0?"":"muted-row"}"><td>${esc(l.title)}${v&&!v.tracked?' <span class="pill warn">not stock-tracked</span>':""}</td>
+        <td class="r">${int(l.qty)}</td><td class="r">${int(l.received)}</td>
+        <td class="r"><input class="n" type="number" min="0" step="1" data-k="now" value="${l.now}" aria-label="Receiving now"></td>
+        <td class="r"><input class="n" type="number" min="0" step="0.01" data-k="newCost" value="${num(l.newCost).toFixed(2)}" aria-label="Unit cost on invoice"></td>
+        <td class="r">${v?esc(v.onHand):""}</td></tr>`; }).join("")}</tbody></table></div>
+      <label style="display:block;margin-top:12px;max-width:600px">Note (packing slip number, damages…)<input id="note" style="width:100%"></label>
+      <div class="actions" style="margin-top:14px"><button class="btn primary" data-a="receive">Receive</button></div>`;
+  };
+  const collect=()=>main.querySelectorAll("tr[data-i]").forEach(tr=>{ const l=lines[int(tr.dataset.i)]; l.now=Math.max(0,int($('[data-k="now"]',tr).value)); l.newCost=num($('[data-k="newCost"]',tr).value); });
+  const finishSave = async (rc) => {
+    po = (await loadPOs(true)).find(p=>p.id===po.id);
+    if(!(po.data.receipts||[]).some(r=>r.id===rc.id)){
+      rc.lines.forEach(x=>{ const l=po.data.lines.find(y=>y.variant_id===x.variant_id); if(l){ l.received=int(l.received)+int(x.qty); } });
+      po.data.receipts=[...(po.data.receipts||[]), rc];
+      const allIn=po.data.lines.every(l=>int(l.received)>=int(l.qty)); po.status= allIn?"received":"partial";
+      await saveMeta(T_PO, po, ["name","status","supplier","data"]); }
+    localStorage.removeItem(pendingKey); pending=null; PURCH.pos=null; PURCH.cat=null;
+  };
+  main.addEventListener("keydown", e=>{ if(e.target.id==="scan" && e.key==="Enter"){ e.preventDefault(); collect(); const v=findByCode(e.target.value); e.target.value="";
+    const i=v?lines.findIndex(l=>l.variant_id===v.id):-1; if(i<0){ flash(main,v?`${v.title} isn't on this purchase order.`:"No product has that barcode.","bad"); return; }
+    if(!e.target.dataset.counted){ lines.forEach(l=>l.now=0); e.target.dataset.counted="1"; }
+    lines[i].now+=1; render(); const tr=main.querySelector(`tr[data-i="${i}"]`); tr.classList.add("hit"); $("#scan",main).focus(); } });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return; collect();
+    if(b.dataset.a==="all"){ lines.forEach(l=>l.now=Math.max(0,int(l.qty)-int(l.received))); render(); return; }
+    if(b.dataset.a==="none"){ lines.forEach(l=>l.now=0); render(); return; }
+    if(b.dataset.a==="finish"){ setBusy(b,true,"Saving…"); try{ await finishSave(pending); flash(main,"Saved.","good"); location.hash="#po/"+legacy(po.id); }catch(err){ flash(main,"Still couldn't save: "+err.message,"bad"); setBusy(b,false); } return; }
+    if(b.dataset.a!=="receive") return;
+    const got=lines.filter(l=>l.now>0); if(!got.length){ flash(main,"Nothing to receive: enter the quantities that arrived.","bad"); return; }
+    setBusy(b,true,"Receiving…");
+    const rc={ id:uuid(), at:nowIso(), note:$("#note",main).value, lines:got.map(l=>({variant_id:l.variant_id, inventory_item_id:l.inventory_item_id, title:l.title, qty:l.now, cost:l.newCost})) };
+    try{
+      const tracked=got.filter(l=>(PURCH.cat.byId[l.variant_id]||{}).tracked);
+      if(tracked.length){ const r=(await gqlv(ADJUST,{key:rc.id, input:{name:"available", reason:"received", referenceDocumentUri:`app://quickbooks-sync/purchase-order/${po.name}`,
+          changes:tracked.map(l=>({delta:l.now, inventoryItemId:l.inventory_item_id, locationId:SETTINGS.location_id, changeFromQuantity:null}))}})).inventoryAdjustQuantities; userErrs(r); }
+      localStorage.setItem(pendingKey, JSON.stringify(rc)); pending=rc;
+      for(const l of got){ const v=PURCH.cat.byId[l.variant_id]; if(!v) continue;
+        const before=Math.max(0,v.onHand); const cost = SETTINGS.purchasing.cost_method==="average" && before>0 && v.cost>0 ? (before*v.cost + l.now*l.newCost)/(before+l.now) : l.newCost;
+        if(Math.abs(cost-v.cost)>=0.005){ try{ userErrs((await gqlv(SET_COST,{id:l.inventory_item_id, input:{cost:cost.toFixed(2)}})).inventoryItemUpdate); }catch(err){ flash(main,`Cost for ${l.title} wasn't updated: ${err.message}`,"bad"); } } }
+      await finishSave(rc);
+      location.hash="#po/"+legacy(po.id); flashNext(`Received ${got.reduce((a,l)=>a+l.now,0)} items. Shopify stock is updated; QuickBooks gets it on the next sync.`,"good");
+    }catch(err){ flash(main,(pending?"Stock was received in Shopify, but saving the purchase order failed: ":"Nothing was received: ")+err.message,"bad"); render(); }
+  });
+  render();
+};
+
+/* ---------- Reorder suggestions ---------- */
+const SET_RULES = `mutation PanelRules($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { metafields { id } userErrors { field message } } }`;
+function suggestion(v, vel, ord, cover, leadOf){
+  const sold60=(vel[legacy(v.id)]||[])[1]||0, sold30=(vel[legacy(v.id)]||[])[0]||0; const r=v.rule||{}; const avail=v.onHand+(ord[v.id]||0);
+  const lead=leadOf(r.supplier); const pack=Math.max(1,int(r.pack)||1); let qty=0, why="";
+  if(r.min!==undefined && r.min!=="" && r.max!==undefined && r.max!==""){ if(avail<=int(r.min)){ qty=int(r.max)-avail; why=`at or below minimum ${int(r.min)}`; } }
+  else if(sold60>0){ const daily=sold60/60; const point=Math.ceil(daily*(lead+7)); if(avail<=point){ qty=Math.ceil(daily*(cover+lead))-avail; why=`about ${Math.ceil(daily*7)} sell per week`; } }
+  if(qty>0) qty=Math.ceil(qty/pack)*pack;
+  return {qty:Math.max(0,qty), why, sold30, sold60, onOrder:ord[v.id]||0};
+}
+pages.reorder = async (main) => {
+  const [cat, sups, , vel] = await Promise.all([loadCatalog(), loadSuppliers(), loadPOs(), loadVelocity()]);
+  const ord=onOrder(); const cover=int(SETTINGS.purchasing.days_of_cover)||45;
+  const leadOf = name => { const s=sups.find(x=>x.name===name); return s?int(s.data.lead_days)||7:7; };
+  const rows=cat.list.filter(v=>v.tracked && v.status==="ACTIVE").map(v=>({...v, __id:v.id, ...suggestion(v,vel,ord,cover,leadOf)}));
+  const changed=new Map();
+  main.innerHTML=`<div class="toprow"><div><h1>Reorder suggestions</h1><p class="sub">Products running low, counting stock already on order. Uses your minimum/maximum when set, otherwise the last 60 days of sales to keep about ${cover} days in stock. Edit the settings right in the table, then save.</p></div>
+    <div class="actions"><button class="btn" data-a="saverules" disabled>Save settings</button> <button class="btn primary" data-a="draft">Create purchase orders</button></div></div>
+    ${(AD.status.settings.purchasing||{}).velocity_at?"":`<p class="banner">Sales history appears after the next sync.</p>`}
+    <datalist id="supl">${sups.map(s=>`<option value="${esc(s.name)}">`).join("")}</datalist><div id="t"></div>`;
+  const inp=(x,k,w,type="number")=>`<input class="n" style="width:${w}px" type="${type}" ${type==="number"?'min="0"':""} data-id="${esc(x.id)}" data-k="${k}" value="${esc((x.rule||{})[k]??"")}" ${k==="supplier"?'list="supl"':""} aria-label="${k}">`;
+  makeTable($("#t",main),{rows, csvName:"reorder", sort:["qty",-1],
+    chips:[["need","Needs ordering",x=>x.qty>0],["nosup","Needs ordering, no supplier",x=>x.qty>0&&!(x.rule||{}).supplier],["all","All stock items"]],
+    columns:[{k:"pick",l:"",nosort:1,f:x=>x.qty>0?`<input type="checkbox" data-pick="${esc(x.id)}" checked aria-label="Order ${esc(x.title)}">`:""},
+      {k:"title",l:"Product",w:1},{k:"onHand",l:"On hand",r:1},{k:"onOrder",l:"On order",r:1,v:x=>x.onOrder||""},
+      {k:"sold30",l:"Sold 30d",r:1,v:x=>x.sold30||""},{k:"sold60",l:"Sold 60d",r:1,v:x=>x.sold60||""},
+      {k:"min",l:"Min",nosort:1,f:x=>inp(x,"min",64)},{k:"max",l:"Max",nosort:1,f:x=>inp(x,"max",64)},
+      {k:"supplier",l:"Supplier",nosort:1,f:x=>inp(x,"supplier",140,"text"),csv:x=>(x.rule||{}).supplier||""},
+      {k:"pack",l:"Pack of",nosort:1,f:x=>inp(x,"pack",56)},
+      {k:"qty",l:"Suggested",r:1,f:x=>x.qty?`<strong>${x.qty}</strong>`:"",sv:x=>x.qty},{k:"why",l:"Why"},{k:"cost",l:"Cost",r:1,f:x=>money(num((x.rule||{}).cost)||x.cost)}]});
+  main.addEventListener("change", e=>{ const t=e.target; if(!t.dataset.k||!t.dataset.id) return; const v=cat.byId[t.dataset.id];
+    const r={...(changed.get(t.dataset.id)||v.rule||{})}; r[t.dataset.k]= t.dataset.k==="supplier"? t.value.trim() : (t.value===""?"":int(t.value)); changed.set(t.dataset.id,r);
+    $('[data-a="saverules"]',main).disabled=false; $('[data-a="saverules"]',main).textContent=`Save settings (${changed.size})`; });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return;
+    if(b.dataset.a==="saverules"){ setBusy(b,true,"Saving…"); try{ const list=[...changed.entries()];
+        for(let i=0;i<list.length;i+=25){ userErrs((await gqlv(SET_RULES,{metafields:list.slice(i,i+25).map(([id,r])=>({ownerId:id, namespace:"$app", key:"reorder", type:"json", value:JSON.stringify(r)}))})).metafieldsSet); }
+        list.forEach(([id,r])=>cat.byId[id].rule=r); changed.clear(); flash(main,"Reorder settings saved.","good"); PURCH.cat=null; route(); }
+      catch(err){ flash(main,"Couldn't save settings: "+err.message,"bad"); setBusy(b,false); } return; }
+    if(b.dataset.a==="draft"){ const picked=[...main.querySelectorAll("input[data-pick]:checked")].map(x=>rows.find(r=>r.id===x.dataset.pick)).filter(r=>r&&r.qty>0);
+      if(!picked.length){ flash(main,"Tick the products to order first.","bad"); return; }
+      const noSup=picked.filter(r=>!(changed.get(r.id)||r.rule||{}).supplier); if(noSup.length){ flash(main,`Set a supplier for ${noSup.length} product(s) first (and save settings).`,"bad"); return; }
+      const bySup={}; picked.forEach(r=>{ const rr=changed.get(r.id)||r.rule||{}; (bySup[rr.supplier]=bySup[rr.supplier]||[]).push({variant_id:r.id, inventory_item_id:r.invId, title:r.title, supplier_sku:rr.sku||"", qty:r.qty, cost:num(rr.cost)||r.cost, received:0}); });
+      setBusy(b,true,"Creating…"); try{ const pos=await loadPOs(true); const made=[];
+        for(const [supplier,lines] of Object.entries(bySup)){ if(!sups.some(s=>s.name===supplier)){ await saveMeta(T_SUP,{name:supplier,handle:"sup-"+supplier.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40)+"-"+Date.now().toString(36),data:{lead_days:7}},["name","data"]); PURCH.suppliers=null; }
+          const name=nextNumber([...pos,...made],"PO"); const saved=await saveMeta(T_PO,{name,handle:name.toLowerCase(),status:"draft",supplier,data:{created_at:nowIso(),lines,receipts:[]},qb:{}},["name","status","supplier","data"]); made.push(saved); }
+        PURCH.pos=null; location.hash="#pos"; flashNext(`Created ${made.length} draft purchase order${made.length===1?"":"s"}: ${made.map(m=>m.name).join(", ")}.`,"good");
+      }catch(err){ flash(main,"Couldn't create purchase orders: "+err.message,"bad"); setBusy(b,false); } } });
+};
+
+/* ---------- Stock counts ---------- */
+pages.counts = async (main) => {
+  const [counts, cat] = await Promise.all([loadCounts(true), loadCatalog()]);
+  const types=[...new Set(cat.list.filter(v=>v.tracked).map(v=>v.type).filter(Boolean))].sort();
+  const sups=[...new Set(cat.list.map(v=>(v.rule||{}).supplier).filter(Boolean))].sort();
+  main.innerHTML=`<div class="toprow"><div><h1>Stock counts</h1><p class="sub">Count what's on the shelf, review the differences, then apply them. Shopify is corrected immediately; the next sync posts the adjustment to QuickBooks.</p></div></div>
+    <form class="form" id="f"><label>What to count<select name="scope"><option value="all">All stock-tracked products</option>
+      ${types.map(t=>`<option value="type:${esc(t)}">Product type: ${esc(t)}</option>`).join("")}${sups.map(s=>`<option value="sup:${esc(s)}">Supplier: ${esc(s)}</option>`).join("")}
+      <option value="low">Items with less than 5 on hand</option></select></label>
+      <label class="check"><input type="checkbox" name="blind"> Hide expected quantities while counting</label>
+      <div class="actions"><button class="btn primary" type="submit">Start a count</button></div></form><h2>Counts</h2><div id="t"></div>`;
+  makeTable($("#t",main),{rows:counts.map(c=>({...c,__id:c.id})), search:false, csvName:"stock_counts", emptyText:"No counts yet.",
+    columns:[{k:"name",l:"Count",f:x=>`<a href="#count/${esc(legacy(x.id))}">${esc(x.name)}</a>`},{k:"scope",l:"What",v:x=>x.data.scope_label||""},
+      {k:"status",l:"Status",f:x=>pill({open:["brass","In progress"],applied:["good","Applied"],cancelled:["bad","Cancelled"]}[x.status]||["",x.status])},
+      {k:"lines",l:"Products",r:1,v:x=>(x.data.lines||[]).length},{k:"created",l:"Started",nw:1,v:x=>shortDate((x.data.created_at||"").slice(0,10))},
+      {k:"qb",l:"QuickBooks",nosort:1,f:x=>x.status!=="applied"?"":x.qb.error?`<span class="pill bad">${esc(x.qb.error)}</span>`:(x.qb.txn||x.qb.empty)?'<span class="pill good">In QuickBooks</span>':'<span class="pill warn">Waiting for sync</span>'}]});
+  $("#f",main).addEventListener("submit", async e=>{ e.preventDefault(); const btn=e.submitter; const sc=e.target.scope.value; setBusy(btn,true,"Starting…");
+    try{ await loadCatalog(true); let items=PURCH.cat.list.filter(v=>v.tracked&&v.status==="ACTIVE"), label="All stock-tracked products";
+      if(sc.startsWith("type:")){ items=items.filter(v=>v.type===sc.slice(5)); label="Product type: "+sc.slice(5); }
+      else if(sc.startsWith("sup:")){ items=items.filter(v=>(v.rule||{}).supplier===sc.slice(4)); label="Supplier: "+sc.slice(4); }
+      else if(sc==="low"){ items=items.filter(v=>v.onHand<5); label="Less than 5 on hand"; }
+      if(!items.length) throw new Error("No products match.");
+      const name=nextNumber(await loadCounts(true),"CNT");
+      const saved=await saveMeta(T_CNT,{name,handle:name.toLowerCase(),status:"open",data:{created_at:nowIso(),scope_label:label,blind:e.target.blind.checked,
+        lines:items.sort((a,b)=>a.title.localeCompare(b.title)).map(v=>({variant_id:v.id,inventory_item_id:v.invId,title:v.title,expected:v.onHand,counted:null,cost:v.cost}))}},["name","status","data"]);
+      PURCH.counts=null; location.hash="#count/"+legacy(saved.id);
+    }catch(err){ flash(main,"Couldn't start the count: "+err.message,"bad"); setBusy(btn,false); } });
+};
+pages.count = async (main, arg) => {
+  await loadCatalog();
+  let c=(await loadCounts(true)).find(x=>legacy(x.id)===arg);
+  if(!c){ main.innerHTML=`<a class="back" href="#counts">All counts</a><p>That count wasn't found.</p>`; return; }
+  let review=false; const d=c.data;
+  const render=()=>{ const open=c.status==="open"; const lines=d.lines||[]; const done=lines.filter(l=>l.counted!==null&&l.counted!=="").length;
+    const diffs=lines.filter(l=>l.counted!==null&&l.counted!==""&&int(l.counted)!==int(l.expected));
+    main.innerHTML=`<a class="back" href="#counts">All counts</a><div class="toprow"><div><h1>${esc(c.name)}</h1><p class="sub" style="margin:0">${esc(d.scope_label)} · ${done} of ${lines.length} counted</p></div>
+      <div class="actions">${open?`<button class="btn" data-a="save">Save progress</button> <button class="btn primary" data-a="review">${review?"Back to counting":"Review differences"}</button>`:""}</div></div>
+      ${open&&!review?`<div class="tools"><input id="scan" type="search" placeholder="Scan a barcode to add 1 to its count" aria-label="Scan to count"></div>`:""}
+      ${review||!open?`<div class="ledger" style="max-width:700px;margin-bottom:14px"><div class="fig"><div class="v">${diffs.length}</div><div class="l">Products with a difference</div></div>
+        <div class="fig"><div class="v">${diffs.reduce((a,l)=>a+int(l.counted)-int(l.expected),0)}</div><div class="l">Units, net</div></div>
+        <div class="fig"><div class="v">${money(diffs.reduce((a,l)=>a+(int(l.counted)-int(l.expected))*num(l.cost),0))}</div><div class="l">Value at cost, net</div></div></div>`:""}
+      <div class="tablewrap"><table class="edit"><thead><tr><th>Product</th>${d.blind&&open&&!review?"":'<th class="r">Expected</th>'}<th class="r">Counted</th>${review||!open?'<th class="r">Difference</th><th class="r">Value</th>':""}</tr></thead><tbody>
+      ${(review||!open?lines.filter(l=>review?l.counted!==null&&l.counted!==""&&int(l.counted)!==int(l.expected):true):lines).map(l=>{ const i=lines.indexOf(l); const df=(l.counted===null||l.counted==="")?null:int(l.counted)-int(l.expected);
+        return `<tr data-i="${i}"><td>${esc(l.title)}</td>${d.blind&&open&&!review?"":`<td class="r">${int(l.expected)}</td>`}
+        <td class="r">${open&&!review?`<input class="n" type="number" min="0" step="1" value="${l.counted??""}" data-k="counted" aria-label="Counted">`:esc(l.counted??"not counted")}</td>
+        ${review||!open?`<td class="r">${df===null?"":`<strong style="color:${df<0?"var(--bad)":"var(--good)"}">${df>0?"+":""}${df}</strong>`}</td><td class="r">${df===null?"":money(df*num(l.cost))}</td>`:""}</tr>`; }).join("")||'<tr><td colspan="5" class="empty">No differences. Everything counted matches Shopify.</td></tr>'}
+      </tbody></table></div>
+      ${open&&review?`<p class="muted">Products left blank aren't changed.</p><div class="actions"><button class="btn primary" data-a="apply">Apply ${diffs.length} correction${diffs.length===1?"":"s"}</button> <button class="btn danger" data-a="cancel">Cancel this count</button></div>`:""}
+      ${c.status==="applied"?`<p class="muted">Applied ${esc(new Date(d.applied_at).toLocaleString("en-US"))}.</p>`:""}`;
+    if($("#scan",main)) $("#scan",main).focus(); };
+  const collect=()=>main.querySelectorAll('tr[data-i] input[data-k="counted"]').forEach(inp=>{ const l=d.lines[int(inp.closest("tr").dataset.i)]; l.counted= inp.value===""?null:int(inp.value); });
+  const save=async(keys=["name","status","data"])=>{ const s=await saveMeta(T_CNT,c,keys); c={...c,...s}; PURCH.counts=null; };
+  main.addEventListener("keydown", e=>{ if(e.target.id==="scan"&&e.key==="Enter"){ e.preventDefault(); collect(); const v=findByCode(e.target.value); e.target.value="";
+    const i=v?d.lines.findIndex(l=>l.variant_id===v.id):-1; if(i<0){ flash(main,v?`${v.title} isn't part of this count.`:"No product has that barcode.","bad"); return; }
+    d.lines[i].counted=int(d.lines[i].counted)+1; render(); const tr=main.querySelector(`tr[data-i="${i}"]`); if(tr){ tr.classList.add("hit"); tr.scrollIntoView({block:"nearest"}); } } });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return; if(c.status==="open"&&!review) collect();
+    if(b.dataset.a==="review"){ review=!review; render(); return; }
+    if(b.dataset.a==="cancel"){ if(!confirmInline(b,"Click again to cancel")) return; c.status="cancelled"; await save(); render(); return; }
+    setBusy(b,true,b.dataset.a==="apply"?"Applying…":"Saving…");
+    try{ if(b.dataset.a==="save"){ await save(); flash(main,"Progress saved.","good"); setBusy(b,false); return; }
+      const adj=d.lines.filter(l=>l.counted!==null&&l.counted!==""&&int(l.counted)!==int(l.expected)).map(l=>({variant_id:l.variant_id,inventory_item_id:l.inventory_item_id,title:l.title,delta:int(l.counted)-int(l.expected),cost:num(l.cost)}));
+      if(adj.length){ userErrs((await gqlv(ADJUST,{key:c.id+"-apply", input:{name:"available", reason:"cycle_count_available", referenceDocumentUri:`app://quickbooks-sync/stock-count/${c.name}`,
+        changes:adj.map(a=>({delta:a.delta, inventoryItemId:a.inventory_item_id, locationId:SETTINGS.location_id, changeFromQuantity:null}))}})).inventoryAdjustQuantities); }
+      d.adjustments=adj; d.applied_at=nowIso(); c.status="applied"; await save(); PURCH.cat=null; review=false; render(); flash(main,`Applied ${adj.length} correction${adj.length===1?"":"s"}. QuickBooks gets them on the next sync.`,"good");
+    }catch(err){ flash(main,"Couldn't finish: "+err.message,"bad"); setBusy(b,false); } });
+  render();
+};
+
+/* ---------- Barcode labels ---------- */
+const C128 = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+function code128(text){
+  const s=String(text); const codes=[];
+  if(/^\d+$/.test(s) && s.length%2===0 && s.length>=4){ codes.push(105); for(let i=0;i<s.length;i+=2) codes.push(int(s.substr(i,2))); }
+  else { codes.push(104); for(const ch of s){ const c=ch.charCodeAt(0); if(c<32||c>126) throw new Error("Barcode text can only use plain letters and numbers"); codes.push(c-32); } }
+  let sum=codes[0]; for(let i=1;i<codes.length;i++) sum+=codes[i]*i; codes.push(sum%103); codes.push(106);
+  return codes.map(c=>C128[c]).join("");
+}
+function barcodeSvg(text, h=40){
+  const widths=code128(text); let x=10, bars=""; for(let i=0;i<widths.length;i++){ const w=int(widths[i]); if(i%2===0) bars+=`<rect x="${x}" y="0" width="${w}" height="${h}"/>`; x+=w; }
+  return `<svg class="bc" viewBox="0 0 ${x+10} ${h}" preserveAspectRatio="none" role="img" aria-label="Barcode ${esc(text)}">${bars}</svg>`;
+}
+const genCode = v => "29"+legacy(v.id);
+const SET_BARCODE = `mutation PanelBarcode($productId: ID!, $variants: [ProductVariantsBulkInput!]!) { productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } } }`;
+pages.labels = async (main, arg) => {
+  await loadCatalog();
+  const list = JSON.parse(sessionStorage.getItem("labels")||"[]");
+  if(arg && arg.includes("~")){ const [poId,rid]=arg.split("~"); const po=(await loadPOs(true)).find(p=>legacy(p.id)===poId); const rc=po&&(po.data.receipts||[]).find(r=>r.id===rid);
+    if(rc){ list.length=0; rc.lines.forEach(l=>list.push({id:l.variant_id, qty:int(l.qty)})); } history.replaceState(null,"","#labels"); }
+  const save=()=>sessionStorage.setItem("labels",JSON.stringify(list));
+  const render=()=>{ const items=list.map(x=>({...x, v:PURCH.cat.byId[x.id]})).filter(x=>x.v); const missing=items.filter(x=>!x.v.barcode&&!x.v.sku);
+    main.innerHTML=`<div class="toprow"><div><h1>Barcode labels</h1><p class="sub">Print price labels with barcodes your POS can scan. Products without a barcode get one, saved to Shopify before printing.</p></div></div>
+      <div class="tools"><div id="pick" style="flex:1;max-width:520px"></div>
+      <label>Label size <select id="fmt"><option value="roll">Roll label 2.25 × 1.25 in (Dymo/Zebra)</option><option value="sheet">Avery 5160 sheet, 30 per page</option></select></label>
+      <label class="check"><input type="checkbox" id="price" checked> Show price</label></div>
+      <div class="tablewrap"><table class="edit"><thead><tr><th>Product</th><th>Barcode</th><th class="r">Price</th><th class="r">Labels</th><th></th></tr></thead><tbody>
+      ${items.map((x,i)=>`<tr data-i="${i}"><td>${esc(x.v.title)}</td><td>${esc(x.v.barcode||x.v.sku||"new: "+genCode(x.v))}</td><td class="r">${money(x.v.price)}</td>
+        <td class="r"><input class="n" type="number" min="0" value="${x.qty}" data-k="qty" aria-label="Number of labels"></td><td><button class="link" data-a="del">Remove</button></td></tr>`).join("")||'<tr><td colspan="5" class="empty">Add products above, or print labels for a delivery from its purchase order.</td></tr>'}
+      </tbody></table></div>
+      <div class="actions" style="margin-top:14px"><button class="btn primary" data-a="print" ${items.length?"":"disabled"}>${missing.length?`Save ${missing.length} new barcode${missing.length===1?"":"s"} and print`:"Print labels"}</button> <button class="btn" data-a="clear">Clear list</button></div>`;
+    $("#pick",main).appendChild(productPicker(v=>{ const ex=list.find(x=>x.id===v.id); if(ex) ex.qty++; else list.push({id:v.id,qty:Math.max(1,v.onHand>0&&v.onHand<20?v.onHand:1)}); save(); render(); }));
+  };
+  main.addEventListener("change", e=>{ if(e.target.dataset.k==="qty"){ list[int(e.target.closest("tr").dataset.i)].qty=Math.max(0,int(e.target.value)); save(); } });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return;
+    if(b.dataset.a==="del"){ list.splice(int(b.closest("tr").dataset.i),1); save(); render(); return; }
+    if(b.dataset.a==="clear"){ list.length=0; save(); render(); return; }
+    const items=list.map(x=>({...x, v:PURCH.cat.byId[x.id]})).filter(x=>x.v&&x.qty>0); const missing=items.filter(x=>!x.v.barcode&&!x.v.sku);
+    setBusy(b,true,"Saving barcodes…");
+    for(const x of missing){ try{ userErrs((await gqlv(SET_BARCODE,{productId:x.v.productId, variants:[{id:x.v.id, barcodes:[{value:genCode(x.v)}]}]})).productVariantsBulkUpdate); x.v.barcode=genCode(x.v); PURCH.cat.byCode[x.v.barcode]=x.v; }
+      catch(err){ flash(main,`Couldn't save a barcode for ${x.v.title} (${err.message}). Its label will still print, but the POS won't recognise it until it has a barcode.`,"bad"); } }
+    setBusy(b,false); const fmt=$("#fmt",main).value, showPrice=$("#price",main).checked; let html="";
+    items.forEach(x=>{ const code=x.v.barcode||x.v.sku||genCode(x.v); for(let i=0;i<x.qty;i++) html+=`<div class="label"><div class="lt">${esc(x.v.title)}</div>${showPrice?`<div class="lp">${money(x.v.price)}</div>`:""}${barcodeSvg(code)}<div class="lc">${esc(code)}</div></div>`; });
+    printArea(`<div class="labels ${fmt}">${html}</div>`); render(); });
+  render();
+};
+
+/* ---------- Stock value ---------- */
+pages.value = async (main) => {
+  const [cat, vel, pos] = await Promise.all([loadCatalog(true), loadVelocity(), loadPOs()]);
+  const st=cat.list.filter(v=>v.tracked); const inStock=st.filter(v=>v.onHand>0);
+  const val=inStock.reduce((a,v)=>a+v.onHand*v.cost,0), retail=inStock.reduce((a,v)=>a+v.onHand*v.price,0);
+  const group=(f)=>{ const m={}; inStock.forEach(v=>{ const k=f(v)||"(none)"; const g=m[k]||(m[k]={name:k,units:0,value:0,retail:0,count:0}); g.units+=v.onHand; g.value+=v.onHand*v.cost; g.retail+=v.onHand*v.price; g.count++; }); return Object.values(m).sort((a,b)=>b.value-a.value); };
+  const sold=v=>(vel[legacy(v.id)]||[])[1]||0;
+  const recent=[]; (pos||[]).forEach(p=>(p.data.receipts||[]).forEach(r=>(r.lines||[]).forEach(l=>{ const v=cat.byId[l.variant_id]; recent.push({po:p.name, supplier:p.supplier, at:r.at, title:l.title, qty:int(l.qty), cost:num(l.cost), now:v?v.cost:null}); })));
+  main.innerHTML=`<h1>Stock value</h1><p class="sub">What's on your shelves, valued at Shopify's cost per item.</p>
+    <div class="ledger"><div class="fig lead"><div class="v">${money(val)}</div><div class="l">Stock value at cost</div></div>
+      <div class="fig"><div class="v">${money(retail)}</div><div class="l">At retail price</div></div>
+      <div class="fig"><div class="v">${n0(inStock.reduce((a,v)=>a+v.onHand,0))}</div><div class="l">Units on hand</div></div>
+      <div class="fig"><div class="v">${n0(inStock.length)}</div><div class="l">Products in stock</div></div></div>
+    <div class="subtabs" role="tablist">${[["type","By product type"],["sup","By supplier"],["nocost","No cost set"],["neg","Below zero"],["slow","Not selling"],["costs","Cost history"]].map(([k,l],i)=>`<button role="tab" type="button" data-t="${k}" class="${i===0?"on":""}" aria-selected="${i===0}">${l}</button>`).join("")}</div><div id="tb"></div>`;
+  const grpCols=[{k:"name",l:"Group"},{k:"count",l:"Products",r:1},{k:"units",l:"Units",r:1},{k:"value",l:"Value at cost",r:1,f:x=>money(x.value)},{k:"retail",l:"At retail",r:1,f:x=>money(x.retail)},{k:"m",l:"Margin",r:1,v:x=>x.retail?Math.round((1-x.value/x.retail)*100)+"%":"",sv:x=>x.retail?1-x.value/x.retail:0}];
+  const prodCols=[{k:"title",l:"Product",w:1},{k:"type",l:"Type"},{k:"onHand",l:"On hand",r:1},{k:"cost",l:"Cost",r:1,f:x=>money(x.cost)},{k:"price",l:"Price",r:1,f:x=>money(x.price)},{k:"value",l:"Value",r:1,v:x=>money(Math.max(0,x.onHand)*x.cost),sv:x=>x.onHand*x.cost},{k:"sold",l:"Sold 60d",r:1,v:sold}];
+  const show=k=>{ main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); }); const h=$("#tb",main);
+    if(k==="type") return makeTable(h,{rows:group(v=>v.type),columns:grpCols,csvName:"stock_by_type",sort:["value",-1],search:false});
+    if(k==="sup") return makeTable(h,{rows:group(v=>(v.rule||{}).supplier),columns:grpCols,csvName:"stock_by_supplier",sort:["value",-1],search:false});
+    if(k==="nocost") return makeTable(h,{rows:inStock.filter(v=>!v.cost).map(v=>({...v,__id:v.id})),columns:prodCols,csvName:"no_cost",emptyText:"Every product in stock has a cost."});
+    if(k==="neg") return makeTable(h,{rows:st.filter(v=>v.onHand<0).map(v=>({...v,__id:v.id})),columns:prodCols,csvName:"below_zero",emptyText:"Nothing is below zero."});
+    if(k==="slow") return makeTable(h,{rows:inStock.filter(v=>!sold(v)).map(v=>({...v,__id:v.id})),columns:prodCols,csvName:"not_selling",sort:["value",-1],emptyText:"Everything in stock sold in the last 60 days."});
+    makeTable(h,{rows:recent.map((r,i)=>({...r,__id:i})),csvName:"cost_history",sort:["at",-1],emptyText:"No deliveries received through the panel yet.",
+      columns:[{k:"at",l:"Received",nw:1,v:x=>shortDate(String(x.at).slice(0,10)),sv:x=>x.at},{k:"po",l:"PO"},{k:"supplier",l:"Supplier"},{k:"title",l:"Product",w:1},{k:"qty",l:"Qty",r:1},{k:"cost",l:"Paid each",r:1,f:x=>money(x.cost)},{k:"now",l:"Cost now",r:1,f:x=>x.now===null?"":money(x.now)}]}); };
+  main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) show(b.dataset.t); });
+  show("type");
+};
+
+/* purchasing pages exist only in Shopify admin, and only while the switch is on */
+const PURCH_PAGES=["suppliers","pos","po","receive","reorder","counts","count","labels","value"];
+PURCH_PAGES.forEach(k=>{ const fn=pages[k]; pages[k]=async(main,arg)=>{ if(!purchOn()){ main.innerHTML=`<h1>Purchasing is switched off</h1><p class="sub">${ADMIN?"Purchase orders, receiving, reorder suggestions, stock counts, labels and stock value are turned on in config.ini on the QuickBooks PC: in the [purchasing] section set enabled = yes, then run a sync. Keep it off while GoStock is still entering purchases in QuickBooks, or purchases will be entered twice.":"Purchasing works in the Shopify admin panel only."}</p>`; return; } return fn(main,arg); }; });
+let FLASH_NEXT=null;
+function flashNext(msg,kind){ FLASH_NEXT=[msg,kind]; }
 async function route(){
   if(OUTSIDE_ADMIN) return outsideAdminNotice($("#main"));
   clearTimeout(timer);
   const [page, arg] = (location.hash.slice(1)||"overview").split("/");
   const fn = pages[page] || pages.overview;
-  document.querySelectorAll("nav a").forEach(a=>{ const on=a.dataset.page===(pages[page]?page:"overview"); a.classList.toggle("on",on); if(on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current"); });
-  const main=$("#main");
-  try{ await fn(main, arg); }
+  const navKey={po:"pos",receive:"pos",suppliers:"pos",count:"counts"}[page]||(pages[page]?page:"overview");
+  document.querySelectorAll("nav a").forEach(a=>{ const on=a.dataset.page===navKey; a.classList.toggle("on",on); if(on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current"); });
+  const old=$("#main"); const main=old.cloneNode(false); old.replaceWith(main);
+  try{ await fn(main, arg); if(FLASH_NEXT){ flash(main,...FLASH_NEXT); FLASH_NEXT=null; } }
   catch(e){ main.innerHTML = ADMIN
       ? `<h1>Can't load this page</h1><p class="sub">Shopify didn't return the sync data. Reload the page; if it keeps happening, check that the app was deployed with Direct API access turned on (see SHOPIFY-PANEL-SETUP.txt).</p><p class="muted">${esc(e.message)}</p>`
       : `<h1>Can't load this page</h1><p class="sub">The sync program isn't answering. Make sure it's running (2-Start-Sync-Window.bat), then reload this page.</p><p class="muted">${esc(e.message)}</p>`; }
@@ -622,6 +1169,7 @@ async function refreshChrome(){
   try{
     const o = await api("/api/overview");
     SETTINGS = o.settings||{};
+    document.querySelectorAll("nav a.purch").forEach(a=>a.hidden=!purchOn());
     const set=(id,n)=>{ const el=$(id); el.hidden=!n; el.textContent=n||""; };
     set("#n-prob", o.problem_count); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
     if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
