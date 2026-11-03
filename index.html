@@ -594,7 +594,19 @@ pages.problems = async (main) => {
 
 /* ---------- router & chrome ---------- */
 let timer=null;
+const OUTSIDE_ADMIN = ADMIN && window.top === window && !window.__QBSYNC_TEST_EMBEDDED;
+function outsideAdminNotice(main){
+  const shop = new URLSearchParams(location.search).get("shop");
+  const store = shop ? shop.replace(".myshopify.com","") : "3e3a8c";
+  main.innerHTML = `<h1>Open this panel from Shopify admin</h1>
+    <p class="sub">This page is the QuickBooks Sync control panel. It shows your sync reports only when it's opened inside Shopify admin, where it can sign in with your Shopify login. Opened on its own like this, it can't read anything.</p>
+    <p><a class="btn" href="https://admin.shopify.com/store/${esc(store)}/apps" target="_top">Go to Apps in Shopify admin</a></p>
+    <p class="muted">Then click QuickBooks Sync. If it opens in a new tab and brings you back here, the app isn't switched on inside Shopify admin yet: run 7-Deploy-Shopify-Panel-Settings.bat on the QuickBooks PC (step 7 of SHOPIFY-PANEL-SETUP.txt).</p>`;
+  $("#foot").textContent = "Not inside Shopify admin";
+  document.querySelector("nav").querySelectorAll("a").forEach(a=>a.hidden=true);
+}
 async function route(){
+  if(OUTSIDE_ADMIN) return outsideAdminNotice($("#main"));
   clearTimeout(timer);
   const [page, arg] = (location.hash.slice(1)||"overview").split("/");
   const fn = pages[page] || pages.overview;
@@ -616,11 +628,11 @@ async function refreshChrome(){
     if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
     const panel = o.settings && o.settings.panel_url ? `<br>Shopify admin panel: ${o.settings.panel_error?'<span style="color:var(--bad)">not updating</span>':o.settings.panel_published?"updated "+esc(ago(o.settings.panel_published)):"waiting for first sync"}` : "";
     $("#foot").innerHTML = o.settings && !o.settings.error ? `${o.settings.mode==="live"?"Live":"Preview"} mode<br>Syncing orders since ${esc(niceDate(o.settings.start_date))}<br>Stock to Shopify: ${o.settings.push_inventory?"on":"off"}${panel}<br><a href="${esc(o.settings.admin_url)}" target="_blank" rel="noopener">Open Shopify admin</a>` : "Settings need attention";
-  }catch(e){ $("#foot").textContent="Sync program not reachable"; }
+  }catch(e){ $("#foot").textContent = ADMIN ? "Can't read the sync data from Shopify" : "Sync program not reachable"; }
 }
 document.body.classList.toggle("embedded", ADMIN);
 window.addEventListener("hashchange", ()=>{ route(); $("#main").focus({preventScroll:true}); });
-refreshChrome().then(route);
+if(OUTSIDE_ADMIN) route(); else refreshChrome().then(route);
 </script>
 </body>
 </html>
