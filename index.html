@@ -147,6 +147,17 @@ body.embedded main{padding:22px 26px 50px}
 @media (prefers-reduced-motion:no-preference){ .tag .bar i{transition:width .6s ease} }
 
 tr.detail td td,tr.detail td th{padding:4px 10px}
+/* sync now */
+.syncbox{padding:14px 22px 0}
+.syncbox .btn{width:100%;text-align:center}
+.syncbox .state{font-size:12.5px;color:var(--steel);margin-top:6px}
+.syncbox .state.warn{color:var(--warn)}
+.syncbox details{font-size:12.5px;margin-top:4px} .syncbox summary{cursor:pointer;color:var(--brass-deep)}
+.syncbox ul{margin:4px 0 0;padding-left:16px;max-height:180px;overflow:auto}
+body.embedded .syncbox{padding:4px 0 4px 12px;margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+body.embedded .syncbox .btn{width:auto} body.embedded .syncbox .state,body.embedded .syncbox details{margin:0}
+body.embedded .syncbox ul{position:absolute;background:var(--panel);border:1px solid var(--rule);border-radius:5px;padding:6px 6px 6px 22px;z-index:6;box-shadow:0 6px 18px rgba(30,43,51,.12)}
+body.embedded nav .foot{margin-left:12px}
 /* purchasing */
 nav a[hidden],[hidden]{display:none!important}
 body.embedded .app{grid-template-rows:auto 1fr}
@@ -208,6 +219,7 @@ tr.hit td{background:var(--good-pale)}
     <a href="#labels" data-page="labels" class="purch" hidden>Labels</a>
     <a href="#value" data-page="value" class="purch" hidden>Stock value</a>
     <a href="#problems" data-page="problems">Problems <span class="count" id="n-prob" hidden></span></a>
+    <div class="syncbox" id="syncbox" aria-live="polite"></div>
     <div class="foot" id="foot">Loading…</div>
   </nav>
   <main id="main" tabindex="-1"></main>
@@ -1205,6 +1217,78 @@ const PURCH_PAGES=["suppliers","pos","po","receive","reorder","counts","count","
 PURCH_PAGES.forEach(k=>{ const fn=pages[k]; pages[k]=async(main,arg)=>{ if(!purchOn()){ main.innerHTML=`<h1>Purchasing is switched off</h1><p class="sub">${ADMIN?"Purchase orders, receiving, reorder suggestions, stock counts, labels and stock value are turned on in config.ini on the QuickBooks PC: in the [purchasing] section set enabled = yes, then run a sync. Keep it off while GoStock is still entering purchases in QuickBooks, or purchases will be entered twice.":"Purchasing works in the Shopify admin panel only."}</p>`; return; } return fn(main,arg); }; });
 let FLASH_NEXT=null;
 function flashNext(msg,kind){ FLASH_NEXT=[msg,kind]; }
+
+/* ---------- Sync now ----------
+   PC: asks the sync program (POST /api/sync-now). Shopify admin: writes the app-data metafield
+   qbsync.sync_request, which the PC checks every minute. Either way the "Shopify Sync - On Demand"
+   Web Connector entry (auto-run every minute) picks it up. The waiting count uses the same rules as
+   triggers.queue_items in the sync program. */
+const SYNC = { timer:null, busyUntil:0, installId:null };
+const QUEUE_Q = `query Queue($cursor: String, $q: String!) { orders(first: 100, after: $cursor, query: $q) {
+  pageInfo { hasNextPage endCursor } nodes { id name processedAt displayFinancialStatus cancelledAt test
+  totalPriceSet { shopMoney { amount } } totalRefundedSet { shopMoney { amount } } } } }`;
+const Q_PAID = ["PAID","PARTIALLY_REFUNDED","REFUNDED"], Q_UNPAID = ["PENDING","PARTIALLY_PAID","AUTHORIZED"];
+function queueItems(orders, sales, unpaidOrders){
+  const out=[]; const m=b=>parseFloat(((b||{}).shopMoney||{}).amount||0)||0;
+  for(const o of orders){ if(o.test) continue; const st=o.displayFinancialStatus||"", r=sales[o.id]; let what="";
+    if(!r){ if(Q_PAID.includes(st)) what="new sale"; else if(Q_UNPAID.includes(st) && unpaidOrders==="invoice" && !o.cancelledAt) what="new invoice"; }
+    else if(r.kind==="invoice" && Q_PAID.includes(st) && (r.paid||0) < (r.total||0)-0.005) what="invoice payment";
+    else if(m(o.totalRefundedSet) > (r.refunded||0)+0.005) what="refund";
+    if(what) out.push({order_id:o.id, order:o.name, date:(o.processedAt||"").slice(0,10), what, total:m(o.totalPriceSet)}); }
+  return out;
+}
+async function adminQueue(){
+  AD.loadedAt=0; const st=await adminStatus(); if(!st) return {unavailable:true};
+  const s=st.settings||{}; const cursor=s.orders_cursor||`${s.start_date}T00:00:00Z`;
+  const orders=[]; let after=null;
+  do { const d=(await gqlv(QUEUE_Q,{cursor:after, q:`updated_at:>='${cursor}' created_at:>='${s.start_date}'`})).orders;
+    orders.push(...d.nodes); after=d.pageInfo.hasNextPage?d.pageInfo.endCursor:null; } while(after && orders.length<1000);
+  const sales={}; (await adminSales()).forEach(r=>sales[r.order_id]={kind:r.kind,total:r.total,paid:r.paid,refunded:r.refunded});
+  const items=queueItems(orders, sales, s.unpaid_orders);
+  const req=await adminRequest();
+  return {queue:{count:items.length, items}, mode:s.mode, schedule_minutes:s.schedule_minutes,
+          pending: req && req.at*1000 > (st.published||0)*1000 ? req : null, running:false, listener_ok:true};
+}
+async function adminRequest(){
+  const d=await gqlv(`{ currentAppInstallation { id metafield(namespace: "qbsync", key: "sync_request") { value } } }`);
+  SYNC.installId=d.currentAppInstallation.id; const v=d.currentAppInstallation.metafield;
+  try{ return v?JSON.parse(v.value):null; }catch(e){ return null; }
+}
+async function requestSync(){
+  if(!ADMIN){ const r=await fetch("/api/sync-now",{method:"POST",headers:{"X-QBSync":"1"}}); if(!r.ok) throw new Error("the sync program refused ("+r.status+")"); return; }
+  if(!SYNC.installId) await adminRequest();
+  const value=JSON.stringify({id:uuid(), at:Date.now()/1000, by:"Shopify admin"});
+  const r=(await gqlv(`mutation SyncNow($m: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $m) { metafields { id } userErrors { field message } } }`,
+    {m:[{ownerId:SYNC.installId, namespace:"qbsync", key:"sync_request", type:"json", value}]})).metafieldsSet; userErrs(r);
+}
+async function drawSyncBox(){
+  const box=$("#syncbox"); if(!box||OUTSIDE_ADMIN) return;
+  clearTimeout(SYNC.timer);
+  let q; try{ q = ADMIN ? await adminQueue() : await (await fetch("/api/queue",{cache:"no-store"})).json(); }
+  catch(e){ q={error:e.message}; }
+  if(q.unavailable){ box.innerHTML=""; return; }
+  const verb = q.mode==="compare"?"Run check now":q.mode==="live"?"Sync now":"Run preview now";
+  const n = q.queue && !q.queue.error ? q.queue.count : null;
+  const list = n ? `<details><summary>What's waiting</summary><ul>${q.queue.items.slice(0,50).map(i=>`<li>${esc(i.order)} ${esc(i.what)}${i.total!=null?" "+money(i.total):""}</li>`).join("")}</ul></details>` : "";
+  let html;
+  if(q.running) html=`<button class="btn" disabled>Syncing…</button><div class="state">QuickBooks is being updated.</div>`;
+  else if(q.pending || Date.now()<SYNC.busyUntil){ const age = q.pending ? Date.now()/1000-q.pending.at : 0;
+    html = age>180 ? `<button class="btn" disabled>Requested</button><div class="state warn">Still waiting for the QuickBooks PC after ${Math.round(age/60)} minutes. Is it on, with QuickBooks, the Web Connector and the sync program running?</div>`
+      : `<button class="btn" disabled>Requested</button><div class="state">Starts within a minute${ADMIN?" on the QuickBooks PC":""}. ${ADMIN?"This page updates when it's done.":""}</div>`; }
+  else if(n===0) html=`<div class="state" style="margin:0"><strong style="color:var(--good)">Up to date</strong> · nothing waiting · <button class="link" data-sync>${esc(verb.replace(" now"," anyway"))}</button></div>`;
+  else html=`<button class="btn primary" data-sync>${esc(verb)}${n?` · ${n} waiting`:""}</button>${list}`;
+  if(q.error||(q.queue&&q.queue.error)) html+=`<div class="state warn">${esc(q.error||q.queue.error)}</div>`;
+  if(!ADMIN && q.listener_ok===false) html+=`<div class="state warn">The Web Connector's "Shopify Sync - On Demand" entry isn't checking in, so this button can't start a sync. Tick its Auto-Run box (SETUP-GUIDE.txt, "Sync now").</div>`;
+  box.innerHTML=html;
+  const busy=!!(q.pending||q.running);
+  if(SYNC.wasBusy && !busy){ SYNC.busyUntil=0; refreshChrome(); route(); }   // a sync just finished: show the new data
+  SYNC.wasBusy=busy;
+  SYNC.timer=setTimeout(drawSyncBox, (busy||Date.now()<SYNC.busyUntil)?5000:20000);
+}
+document.addEventListener("click", async e=>{ const b=e.target.closest("[data-sync]"); if(!b) return;
+  b.disabled=true; try{ await requestSync(); SYNC.busyUntil=Date.now()+90000; }
+  catch(err){ alertBox("Couldn't ask for a sync: "+err.message); } drawSyncBox(); });
+function alertBox(msg){ const m=$("#main"); if(m) flash(m,msg,"bad"); }
 async function route(){
   if(OUTSIDE_ADMIN) return outsideAdminNotice($("#main"));
   clearTimeout(timer);
@@ -1234,7 +1318,7 @@ async function refreshChrome(){
 }
 document.body.classList.toggle("embedded", ADMIN);
 window.addEventListener("hashchange", ()=>{ route(); $("#main").focus({preventScroll:true}); });
-if(OUTSIDE_ADMIN) route(); else refreshChrome().then(route);
+if(OUTSIDE_ADMIN) route(); else { refreshChrome().then(route); drawSyncBox(); }
 </script>
 </body>
 </html>
