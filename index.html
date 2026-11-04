@@ -288,6 +288,7 @@ async function adminApi(path){
   if(route==="/api/reconcile"){ const keys=(st.index||{}).recon||[]; if(!keys.length) return {empty:true};
     await loadKeys(keys); return {...AD.parts[keys[0]], orders: await adminTable("reconorders")}; }
   if(route==="/api/inventory") return {...st.meta.inventory, rows: await adminTable("inventory")};
+  if(route==="/api/purchases") return {...((st.meta||{}).purchases||{}), rows: (st.index||{}).purchases ? await adminTable("purchases") : []};
   if(route==="/api/products") return {linked: st.meta.products.linked, rows: await adminTable("products")};
   if(route==="/api/customers") return {linked: st.meta.customers.linked, rows: await adminTable("customers"), top: await adminTable("topcustomers")};
   const sales = await adminSales();
@@ -538,18 +539,45 @@ pages.invoices = async (main) => {
     columns:[{k:"synced_at",l:"Recorded",f:x=>esc(when(x.synced_at))},{k:"order_name",l:"Order"},{k:"customer",l:"Customer"},{k:"amount",l:"Amount",r:1,f:x=>money(x.amount)}]});
 };
 
-pages.inventory = async (main) => {
-  const d = await api("/api/inventory");
+pages.inventory = async (main, arg) => {
+  const [d, pu] = await Promise.all([api("/api/inventory"), api("/api/purchases").catch(()=>({rows:[]}))]);
   const demoStock = SETTINGS.demo && SETTINGS.demo.stock;
   main.innerHTML = `<h1>Stock</h1><p class="sub">${SETTINGS.push_inventory
       ? "Stock to Shopify is on: QuickBooks is the master count. Each sync compares it with Shopify and updates Shopify to match. Unposted Shopify sales are subtracted first so nothing is double-counted."
       : demoStock
       ? "Demo of <strong>Stock to Shopify</strong>: \"demo: would update Shopify\" shows the counts it would send from QuickBooks (unposted Shopify sales are subtracted first). Nothing is sent - the real setting (push_inventory) is still off, so Shopify keeps its own counts."
       : "Stock to Shopify is off (push_inventory = no): Shopify keeps its own counts. This page shows where QuickBooks and Shopify differ; nothing is sent."}</p>
-    <p class="muted">${d.run_id?`From the ${d.mode} run finished ${esc(when(d.finished))}.`:""}</p><div id="t"></div>`;
+    <p class="muted">${d.run_id?`Counts from the ${d.mode} run finished ${esc(when(d.finished))}. A purchase entered in QuickBooks shows here after the next sync.`:""}</p>
+    <div class="subtabs" role="tablist">${[["counts","Stock counts"],["purchases",`Purchases in QuickBooks (${(pu.rows||[]).length})`]].map(([k,l])=>`<button role="tab" type="button" data-t="${k}">${esc(l)}</button>`).join("")}</div><div id="t"></div>`;
+  const show = k => { main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); });
+    return k==="purchases" ? drawPurchases($("#t",main), pu) : drawCounts($("#t",main), d); };
+  main.querySelectorAll(".subtabs button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.t)));
+  show(arg==="purchases" ? "purchases" : "counts");
+};
+
+function drawPurchases(host, pu){
+  const rows = (pu.rows||[]).map((x,i)=>({...x, __id:i}));
+  const pill = st => st==="ok" ? `<span class="pill good">ok</span>` : `<span class="pill ${/^expense/.test(st)?"":"warn"}">${esc(st)}</span>`;
+  const lineTable = x => { const ls=(x.lines||"").split("; ").filter(Boolean).map(l=>l.split("|"));
+    return `<table class="lines"><thead><tr><th>QuickBooks item</th><th class="r">Qty</th><th class="r">Cost</th><th class="r">Amount</th><th>Shopify product</th><th class="r">Shopify on hand (at sync)</th><th></th></tr></thead><tbody>
+      ${ls.map(([it,q,c,a,pr,oh,st])=>`<tr><td>${esc(it)}</td><td class="r">${esc(q)}</td><td class="r">${c?money(c):""}</td><td class="r">${money(a)}</td><td>${esc(pr||"—")}</td><td class="r">${esc(oh)}</td><td>${pill(st)}</td></tr>`).join("")}</tbody></table>
+      ${x.memo?`<p class="muted">Memo: ${esc(x.memo)}</p>`:""}`; };
+  host.innerHTML = `<p class="sub">Bills and Item Receipts in QuickBooks${pu.days?` from the last ${esc(pu.days)} days`:""} - GoStock's and anyone else's. Each line shows the Shopify product it belongs to, so you can check a delivery landed on the right items. Read-only: nothing is changed.${pu.finished?` From the ${esc(pu.mode)} run finished ${esc(when(pu.finished))}.`:""}</p><div id="pt"></div>`;
+  const chips=[["all","All"],["check","Lines to check",x=>x.status!=="ok"],["ok","All lines linked",x=>x.status==="ok"]];
+  makeTable($("#pt",host), { rows, csvName:"purchases", chips, sort:["date",-1], detail:lineTable,
+    emptyText:"No purchases found in QuickBooks yet. They're listed after the next sync (Sync now, preview or Run check now).",
+    columns:[{k:"date",l:"Date",nw:1},{k:"supplier",l:"Supplier",w:1},{k:"type",l:"Type",nw:1},{k:"ref",l:"No.",nw:1},
+      {k:"items",l:"Units",r:1},{k:"total",l:"Total",r:1,f:x=>money(x.total)},
+      {k:"paid",l:"Paid"},
+      {k:"status",l:"Lines",f:x=>x.status==="ok"?`<span class="pill good">${x.lines_ok} linked</span>`:`<span class="pill warn">${esc(x.note)}</span>`}]});
+}
+
+function drawCounts(host, d){
+  const main = host;
+  host.innerHTML = `<div id="ct"></div>`;
   const rows = d.rows.map(r=>({...r, diff: (r.new_shopify_on_hand===""||r.shopify_on_hand==="") ? "" : (+r.new_shopify_on_hand) - (+r.shopify_on_hand)}));
   const neg = x => String(x.action).startsWith("NOT pushed");
-  makeTable($("#t",main), { rows, csvName:"stock", sort:["shopify_title",1], emptyText:"No stock report yet. Run a sync first.",
+  makeTable($("#ct",main), { rows, csvName:"stock", sort:["shopify_title",1], emptyText:"No stock report yet. Run a sync first.",
     chips:[["diff","Different",x=>x.diff!==""&&x.diff!==0],["neg","Below zero in QuickBooks",neg],["pushed","Updated this run",x=>String(x.action).startsWith("updated")],["would","Would update",x=>/would update/.test(String(x.action))],["new","New in QuickBooks",x=>String(x.quickbooks_item).endsWith("(new)")],["all","All"]],
     columns:[
       {k:"shopify_title",l:"Product",w:1},{k:"quickbooks_item",l:"QuickBooks item",w:1},
