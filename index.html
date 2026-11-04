@@ -146,6 +146,7 @@ body.embedded main{padding:22px 26px 50px}
 }
 @media (prefers-reduced-motion:no-preference){ .tag .bar i{transition:width .6s ease} }
 
+tr.detail td td,tr.detail td th{padding:4px 10px}
 /* purchasing */
 nav a[hidden],[hidden]{display:none!important}
 body.embedded .app{grid-template-rows:auto 1fr}
@@ -199,6 +200,7 @@ tr.hit td{background:var(--good-pale)}
     <a href="#inventory" data-page="inventory">Stock</a>
     <a href="#products" data-page="products">Products</a>
     <a href="#customers" data-page="customers">Customers</a>
+    <a href="#reconcile" data-page="reconcile">Reconcile <span class="count" id="n-rec" hidden></span></a>
     <a href="#history" data-page="history">Sync history</a>
     <a href="#pos" data-page="pos" class="purch" hidden>Purchase orders</a>
     <a href="#reorder" data-page="reorder" class="purch" hidden>Reorder</a>
@@ -276,6 +278,8 @@ async function adminApi(path){
   if(route==="/api/run"){ const id=+new URLSearchParams(q).get("id"); const r=st.runs.find(x=>x.id===id); if(!r) return {missing:true};
     const acts = (await adminTable("activity")).filter(a=>a.run_id===id).reverse();
     return {...r, report:{}, activity:acts, admin_note: !st.activity_runs.includes(id)}; }
+  if(route==="/api/reconcile"){ const keys=(st.index||{}).recon||[]; if(!keys.length) return {empty:true};
+    await loadKeys(keys); return {...AD.parts[keys[0]], orders: await adminTable("reconorders")}; }
   if(route==="/api/inventory") return {...st.meta.inventory, rows: await adminTable("inventory")};
   if(route==="/api/products") return {linked: st.meta.products.linked, rows: await adminTable("products")};
   if(route==="/api/customers") return {linked: st.meta.customers.linked, rows: await adminTable("customers"), top: await adminTable("topcustomers")};
@@ -306,7 +310,8 @@ async function adminApi(path){
   const list=(o,f)=>Object.entries(o).map(([name,v])=>typeof v==="number"?{name,total:v}:{name,...v}).sort((a,b)=>f(b)-f(a));
   return { settings: st.settings, running:null, last_run: st.runs[0]||null, last_live_ok: st.last_live_ok, from, to, kpis:k, daily:days,
     by_method:list(byM,x=>x.total), by_account:list(byA,x=>x.total), by_source:list(byS,x=>x.total), top_items:list(items,x=>x.amount).slice(0,10),
-    problem_count: P.failed.length + P.last_errors.filter(e=>!e.startsWith("Order ")).length, waiting_count: P.waiting.length, published: st.published };
+    problem_count: P.failed.length + P.last_errors.filter(e=>!e.startsWith("Order ")).length, waiting_count: P.waiting.length, published: st.published,
+    recon_problems: (st.recon||{}).problems||0 };
 }
 
 let SETTINGS = {};
@@ -651,6 +656,56 @@ function outsideAdminNotice(main){
     <p class="muted">Then click QuickBooks Sync. If it opens in a new tab and brings you back here, the app isn't switched on inside Shopify admin yet: run 7-Deploy-Shopify-Panel-Settings.bat on the QuickBooks PC (step 7 of SHOPIFY-PANEL-SETUP.txt).</p>`;
   document.querySelector("nav").style.display = "none";
 }
+
+/* ---------- Reconcile: is every Shopify order in QuickBooks, correctly? ---------- */
+const RSTAT = {problem:["bad","Problem"], check:["warn","Check"], ok:["good","Match"], info:["","Not posted"]};
+const rpill = s => { const [c,l]=RSTAT[s]||["",s]; return `<span class="pill ${c}">${l}</span>`; };
+const signed = v => (v<0?"-":v>0?"+":"")+usd.format(Math.abs(v||0));
+pages.reconcile = async (main) => {
+  const r = await api("/api/reconcile");
+  if(r.empty){ main.innerHTML = `<h1>Reconcile</h1><p class="sub">No check has run yet. This page compares every Shopify order with what's actually in QuickBooks, whoever entered it (LinkToAny, this program, or by hand).</p>
+    <p class="sub">To run it while LinkToAny is still posting your sales, set <strong>mode = compare</strong> in config.ini on the QuickBooks PC and run the Web Connector. Compare mode only reads; it changes nothing in QuickBooks or Shopify. In live mode the check also runs once a day by itself.</p>`; return; }
+  const c = r.counts, diff = r.qb_total - r.shopify_total;
+  main.innerHTML = `<div class="toprow"><div><h1>Reconcile</h1>
+      <p class="sub" style="margin:0">Every Shopify order from ${esc(niceDate(r.from))} to ${esc(niceDate(r.to))} checked against QuickBooks. Checked ${esc(ago(r.at))}.</p></div></div>
+    <div class="ledger"><div class="fig lead"><div class="v" style="color:${c.problem+c.qb_only_problem?"var(--bad)":"var(--good)"}">${c.problem+c.qb_only_problem}</div><div class="l">Problems</div></div>
+      <div class="fig"><div class="v">${n0(c.check)}</div><div class="l">To check</div></div>
+      <div class="fig"><div class="v">${n0(c.ok)}</div><div class="l">Match</div></div>
+      <div class="fig"><div class="v">${n0(c.orders)}</div><div class="l">Shopify orders checked</div></div>
+      <div class="fig"><div class="v">${signed(diff)}</div><div class="l">QuickBooks vs Shopify sales</div></div></div>
+    <ul class="muted" style="margin:12px 0 0;padding-left:18px">${(r.summary||[]).slice(1).map(l=>`<li>${esc(l.trim())}</li>`).join("")}</ul>
+    <div class="subtabs" role="tablist">${[["orders","Orders"],["days","By day"],["qb","In QuickBooks only ("+(r.qb_only||[]).length+")"]].map(([k,l],i)=>`<button role="tab" type="button" data-t="${k}" class="${i===0?"on":""}" aria-selected="${i===0}">${esc(l)}</button>`).join("")}</div><div id="tb"></div>`;
+  const rows = r.orders.map((x,i)=>({...x, __id:i}));
+  const show = k => { main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); }); const h=$("#tb",main);
+    if(k==="orders"){ const chips=[["problem","Problems",x=>x.status==="problem"],["check","To check",x=>x.status==="check"],["ok","Match",x=>x.status==="ok"],["info","Not posted",x=>x.status==="info"],["all","All"]];
+      if(!rows.some(x=>x.status==="problem")) chips.push(chips.shift());
+      return makeTable(h,{rows, csvName:"reconcile_orders", chips, sort:["date",1],
+        columns:[{k:"order",l:"Order",f:x=>shopifyOrderLink({order_id:x.order_id, order_name:x.order}),v:x=>x.order},
+          {k:"date",l:"Date",nw:1,v:x=>shortDate(x.date),sv:x=>x.date+x.order},{k:"status",l:"Result",f:x=>rpill(x.status),v:x=>(RSTAT[x.status]||[])[1]},
+          {k:"notes",l:"What's different",w:1},{k:"shopify_total",l:"Shopify",r:1,f:x=>money(x.shopify_total)},{k:"qb_total",l:"QuickBooks",r:1,f:x=>money(x.qb_total)},
+          {k:"qb_ref",l:"QuickBooks no."},{k:"matched_by",l:"Found by"},{k:"entered_by",l:"Entered by"}],
+        detail:x=>`<table class="lines"><thead><tr><th></th><th>Shopify</th><th>QuickBooks</th></tr></thead><tbody>
+          <tr><td>Type</td><td>${esc(x.would_post)} <span class="muted">(what this program posts)</span></td><td>${esc(x.qb_type||"—")}</td></tr>
+          <tr><td>Number</td><td>${esc(x.order)}</td><td>${esc(x.qb_ref||"—")}</td></tr>
+          <tr><td>Date</td><td>${esc(niceDate(x.date))}</td><td>${esc(x.qb_date?niceDate(x.qb_date):"—")}</td></tr>
+          <tr><td>Total</td><td>${money(x.shopify_total)}</td><td>${money(x.qb_total)}</td></tr>
+          <tr><td>Sales tax</td><td>${money(x.shopify_tax)}</td><td>${money(x.qb_tax)}</td></tr>
+          <tr><td>Refunds</td><td>${money(x.refunds_shopify)||"—"}</td><td>${money(x.refunds_qb)||"—"}</td></tr>
+          <tr><td>Customer</td><td>${esc(x.customer)}</td><td>${esc(x.qb_customer||"—")}</td></tr>
+          <tr><td>Payment</td><td>${esc(x.shopify_method)} <span class="muted">${esc(x.shopify_status)}</span></td><td>${esc(x.qb_method||"—")}${x.qb_balance!==null&&x.qb_balance!==undefined?` <span class="muted">balance ${money(x.qb_balance)}</span>`:""}</td></tr></tbody></table>`}); }
+    if(k==="days") return makeTable(h,{rows:r.days.map((d,i)=>({...d,__id:i})), csvName:"reconcile_days", search:false, sort:["date",-1],
+      columns:[{k:"date",l:"Date",nw:1,v:x=>niceDate(x.date),sv:x=>x.date},{k:"status",l:"Result",f:x=>rpill(x.status)},{k:"orders",l:"Orders",r:1},
+        {k:"shopify_sales",l:"Shopify sales",r:1,f:x=>money(x.shopify_sales)},{k:"qb_sales",l:"QuickBooks sales",r:1,f:x=>money(x.qb_sales)},
+        {k:"difference",l:"Difference",r:1,f:x=>x.difference?`<strong style="color:var(--bad)">${signed(x.difference)}</strong>`:"0"},
+        {k:"shopify_tax",l:"Shopify tax",r:1,f:x=>money(x.shopify_tax)},{k:"qb_tax",l:"QuickBooks tax",r:1,f:x=>money(x.qb_tax)},
+        {k:"missing",l:"Missing",r:1,v:x=>x.missing||""},{k:"problems",l:"Problems",r:1,v:x=>x.problems||""}]});
+    makeTable(h,{rows:(r.qb_only||[]).map((q,i)=>({...q,__id:i})), csvName:"reconcile_quickbooks_only", sort:["status",-1],
+      emptyText:"Every QuickBooks sale in these dates belongs to a Shopify order.",
+      columns:[{k:"date",l:"Date",nw:1,v:x=>shortDate(x.date),sv:x=>x.date},{k:"status",l:"Result",f:x=>rpill(x.status),sv:x=>x.status==="problem"?1:0},
+        {k:"type",l:"Type"},{k:"ref",l:"QuickBooks no."},{k:"total",l:"Total",r:1,f:x=>money(x.total)},{k:"customer",l:"Customer"},{k:"memo",l:"Memo",w:1},{k:"note",l:"Why it's listed"}]}); };
+  main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) show(b.dataset.t); });
+  show("orders");
+};
 /* ======================================================================
    PURCHASING (Shopify admin panel only)
    Suppliers, purchase orders, receiving, reorder suggestions, stock counts,
@@ -1171,10 +1226,10 @@ async function refreshChrome(){
     SETTINGS = o.settings||{};
     document.querySelectorAll("nav a.purch").forEach(a=>a.hidden=!purchOn());
     const set=(id,n)=>{ const el=$(id); el.hidden=!n; el.textContent=n||""; };
-    set("#n-prob", o.problem_count); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
+    set("#n-prob", o.problem_count); set("#n-rec", o.recon_problems); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
     if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
     const panel = o.settings && o.settings.panel_url ? `<br>Shopify admin panel: ${o.settings.panel_error?'<span style="color:var(--bad)">not updating</span>':o.settings.panel_published?"updated "+esc(ago(o.settings.panel_published)):"waiting for first sync"}` : "";
-    $("#foot").innerHTML = o.settings && !o.settings.error ? `${o.settings.mode==="live"?"Live":"Preview"} mode<br>Syncing orders since ${esc(niceDate(o.settings.start_date))}<br>Stock to Shopify: ${o.settings.push_inventory?"on":"off"}${panel}<br><a href="${esc(o.settings.admin_url)}" target="_blank" rel="noopener">Open Shopify admin</a>` : "Settings need attention";
+    $("#foot").innerHTML = o.settings && !o.settings.error ? `${{live:"Live",compare:"Compare (read-only)"}[o.settings.mode]||"Preview"} mode<br>Syncing orders since ${esc(niceDate(o.settings.start_date))}<br>Stock to Shopify: ${o.settings.push_inventory?"on":"off"}${panel}<br><a href="${esc(o.settings.admin_url)}" target="_blank" rel="noopener">Open Shopify admin</a>` : "Settings need attention";
   }catch(e){ $("#foot").textContent = ADMIN ? "Can't read the sync data from Shopify" : "Sync program not reachable"; }
 }
 document.body.classList.toggle("embedded", ADMIN);
