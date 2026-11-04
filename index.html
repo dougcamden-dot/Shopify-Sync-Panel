@@ -131,12 +131,6 @@ pre.summary{background:var(--panel);border:1px solid var(--rule);border-radius:6
 .back{display:inline-block;margin-bottom:10px}
 
 /* inside Shopify admin: Shopify already provides the left sidebar, so pages become tabs */
-body.embedded .app{grid-template-columns:1fr}
-body.embedded nav{position:static;height:auto;display:flex;flex-wrap:wrap;gap:2px;padding:6px 26px 0;border-right:0;border-bottom:1px solid var(--rule)}
-body.embedded nav .brand{display:none}
-body.embedded nav a{border-left:0;border-bottom:3px solid transparent;padding:8px 12px;margin-bottom:-1px}
-body.embedded nav a.on{border-bottom-color:var(--brass);background:none}
-body.embedded nav .foot{display:block;border:0;margin:0 0 0 auto;padding:8px 0;align-self:center}
 body.embedded main{padding:22px 26px 50px}
 @media (max-width:900px){
   .app{grid-template-columns:1fr} nav{position:static;height:auto;display:flex;flex-wrap:wrap;padding:10px}
@@ -154,15 +148,8 @@ tr.detail td td,tr.detail td th{padding:4px 10px}
 .syncbox .state.warn{color:var(--warn)}
 .syncbox details{font-size:12.5px;margin-top:4px} .syncbox summary{cursor:pointer;color:var(--brass-deep)}
 .syncbox ul{margin:4px 0 0;padding-left:16px;max-height:180px;overflow:auto}
-body.embedded .syncbox{padding:4px 0 4px 12px;margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-body.embedded .syncbox .btn{width:auto} body.embedded .syncbox .state,body.embedded .syncbox details{margin:0}
-body.embedded .syncbox ul{position:absolute;background:var(--panel);border:1px solid var(--rule);border-radius:5px;padding:6px 6px 6px 22px;z-index:6;box-shadow:0 6px 18px rgba(30,43,51,.12)}
-body.embedded nav .foot{margin-left:12px}
 /* purchasing */
 nav a[hidden],[hidden]{display:none!important}
-body.embedded .app{grid-template-rows:auto 1fr}
-body.embedded nav{align-items:center;align-content:flex-start;row-gap:0}
-body.embedded nav a{padding:7px 10px;font-size:14px}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .btn{text-decoration:none;color:var(--ink);display:inline-block}
 .btn.primary{background:var(--brass);border-color:var(--brass-deep);color:#fff}
