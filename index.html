@@ -703,6 +703,8 @@ pages.reconcile = async (main) => {
           <tr><td>Total</td><td>${money(x.shopify_total)}</td><td>${money(x.qb_total)}</td></tr>
           <tr><td>Sales tax</td><td>${money(x.shopify_tax)}</td><td>${money(x.qb_tax)}</td></tr>
           ${x.qb_lines?`<tr><td>QuickBooks lines</td><td class="muted">the total compared is the whole sale, not the amount due</td><td><table class="lines">${x.qb_lines.split("; ").map(l=>{ const [it,q,a]=l.split("|"); return `<tr><td>${esc(it)}</td><td class="r">${esc(q)}</td><td class="r">${money(a)}</td></tr>`; }).join("")}</table></td></tr>`:""}
+          ${x.qb_paid_in_receipt?`<tr><td>Payment line</td><td class="muted">recorded inside the receipt, so QuickBooks shows the receipt as $0.00 – not counted as a sale line</td><td>${money(x.qb_paid_in_receipt)} received</td></tr>`:""}
+          ${x.qb_other_entries?`<tr><td>Other entries</td><td class="muted">carry this order number but aren't sales or refunds (e.g. cost of goods)</td><td>${esc(x.qb_other_entries).split("; ").join("<br>")}</td></tr>`:""}
           ${x.shopify_tax_parts||x.qb_tax_parts?`<tr><td>Tax breakdown</td><td>${esc(x.shopify_tax_parts||"—").split("; ").join("<br>")}</td><td>${esc(x.qb_tax_parts||"—").split("; ").join("<br>")}</td></tr>`:""}
           <tr><td>Refunds</td><td>${money(x.refunds_shopify)||"—"}</td><td>${money(x.refunds_qb)||"—"}</td></tr>
           <tr><td>Customer</td><td>${esc(x.customer)}</td><td>${esc(x.qb_customer||"—")}</td></tr>
