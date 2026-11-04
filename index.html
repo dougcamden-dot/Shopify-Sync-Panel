@@ -150,7 +150,6 @@ tr.detail td td,tr.detail td th{padding:4px 10px}
 .syncbox ul{margin:4px 0 0;padding-left:16px;max-height:180px;overflow:auto}
 .banner.demo{border-color:var(--brass);background:var(--brass-pale)}
 /* tools */
-body.embedded nav a.pconly{display:none}
 .tsec{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px 18px 16px;margin:0 0 14px;max-width:920px}
 .tsec h2{margin:0 0 4px} .tsec p{margin:4px 0 10px;color:var(--steel);max-width:75ch}
 .tsec .actions{margin-top:6px} .tsec .state-on{color:var(--good);font-weight:600} .tsec .state-off{color:var(--steel);font-weight:600}
@@ -1300,13 +1299,77 @@ document.addEventListener("click", async e=>{ const b=e.target.closest("[data-sy
 function alertBox(msg){ const m=$("#main"); if(m) flash(m,msg,"bad"); }
 
 /* ---------- Tools (PC dashboard only): what the numbered .bat files used to do ---------- */
+
+/* Tools inside Shopify admin: a click leaves a request in the store (metafield qbsync.tool_request);
+   the QuickBooks PC picks it up within a minute, does it, and answers in qbsync.tool_result. */
+const TOOL_Q = `{ currentAppInstallation { id tres: metafield(namespace: "qbsync", key: "tool_result") { value }
+  treq: metafield(namespace: "qbsync", key: "tool_request") { value } } }`;
+async function adminToolState(){
+  const d=(await gqlv(TOOL_Q)).currentAppInstallation; SYNC.installId=d.id;
+  const p=v=>{ try{ return v?JSON.parse(v.value):null; }catch(e){ return null; } };
+  return {res:p(d.tres), req:p(d.treq)};
+}
+async function adminToolAsk(action){
+  if(!SYNC.installId) await adminToolState();
+  const req={id:uuid(), action, at:Date.now()/1000, by:"Shopify admin"};
+  userErrs((await gqlv(`mutation ToolAsk($m: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $m) { metafields { id } userErrors { field message } } }`,
+    {m:[{ownerId:SYNC.installId, namespace:"qbsync", key:"tool_request", type:"json", value:JSON.stringify(req)}]})).metafieldsSet);
+  return req;
+}
+const TOOL_NAMES = {status:"Refresh status", check:"Check settings", restart:"Restart"};
+async function adminTools(main){
+  AD.loadedAt=0; const st=await adminStatus(); const set=(st&&st.settings)||{};
+  const {res, req} = await adminToolState();
+  const pc = res && res.pc && (!set.pc || !set.pc.at || res.pc.at >= set.pc.at) ? res.pc : (set.pc||{});
+  const seen = pc.listener_seen, stale = !seen || Date.now()/1000-seen > 180;
+  const waiting = req && (!res || res.id!==req.id) ? req : null;
+  const lr = pc.last_run || (st&&st.runs&&st.runs[0]) || null;
+  const yn = v => v===true?"Yes":v===false?"No":"Unknown";
+  main.innerHTML = `<h1>Tools</h1><p class="sub">These buttons reach the QuickBooks PC through your store: the PC picks them up within a minute, as long as it's on with the Web Connector's <strong>Shopify Sync - On Demand</strong> entry set to Auto-Run. Settings, the Web Connector files, the panel files and folders are on the Tools page of the dashboard on the QuickBooks PC.</p>
+    <section class="tsec"><h2>The QuickBooks PC</h2>
+      <table class="lines" style="max-width:640px"><tbody>
+        <tr><td>Last checked in</td><td>${seen?esc(ago(seen))+" ("+esc(when(seen))+")":"never seen"}${stale?' <span class="pill warn">not checking in</span>':' <span class="pill good">online</span>'}</td></tr>
+        <tr><td>Sync program</td><td>${pc.version?"version "+esc(pc.version)+", ":""}${pc.started_at?"running since "+esc(when(pc.started_at)):"start time not known yet"}</td></tr>
+        <tr><td>Starts with Windows</td><td>${yn(pc.autostart)}</td></tr>
+        <tr><td>Desktop shortcut</td><td>${pc.shortcuts==null?"Unknown":pc.shortcuts?"Yes":"No"}</td></tr>
+        <tr><td>Mode</td><td>${esc({live:"Live",compare:"Compare / demo",preview:"Preview"}[pc.mode||set.mode]||pc.mode||set.mode||"")}</td></tr>
+        <tr><td>Automatic sync</td><td>${(pc.schedule_minutes??set.schedule_minutes)?`every ${esc(pc.schedule_minutes??set.schedule_minutes)} minutes`:"only when asked"}</td></tr>
+        <tr><td>Last sync</td><td>${lr?esc(ago(lr.finished))+" - "+statusPill(lr.status):"none yet"}</td></tr>
+      </tbody></table>
+      ${stale?`<p class="banner" style="margin-top:12px">The PC hasn't checked in for a while, so the buttons below will wait until it does. Check that the QuickBooks PC is on, and that the On Demand entry in the Web Connector has Auto-Run ticked.</p>`:""}
+      <div class="actions" style="margin-top:10px"><button class="btn" data-ask="status">Refresh status</button> <button class="btn primary" data-ask="check">Check settings</button>
+        ${set.remote_restart===false?"":`<button class="btn" data-ask="restart" data-confirm="Click again to restart the sync program">Restart sync program</button>`}</div>
+      ${set.remote_restart===false?`<p class="muted">Restarting from here is turned off in config.ini on the PC.</p>`:""}
+      <pre class="toolout" hidden></pre></section>`;
+  const out=$(".toolout",main);
+  const show=(text,bad)=>{ out.hidden=false; out.classList.toggle("bad",!!bad); out.textContent=text; };
+  if(TOOL_LAST){ show(TOOL_LAST.text, !TOOL_LAST.ok); TOOL_LAST=null; }
+  else if(waiting) show(`Waiting for the QuickBooks PC: ${TOOL_NAMES[waiting.action]||waiting.action}, asked ${ago(waiting.at)}.`);
+  else if(res) show(`${TOOL_NAMES[res.action]||res.action} - answered ${ago(res.at)}:\n`+(res.lines||[]).join("\n"), !res.ok);
+  main.addEventListener("click", async e=>{
+    const b=e.target.closest("[data-ask]"); if(!b) return;
+    if(b.dataset.confirm && !confirmInline(b,b.dataset.confirm)) return;
+    main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=true);
+    let ask; try{ ask=await adminToolAsk(b.dataset.ask); }catch(err){ show("Couldn't send it: "+err.message, true); main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=false); return; }
+    const name=TOOL_NAMES[ask.action]; show(`${name}: sent. Waiting for the QuickBooks PC (usually under a minute)…`);
+    for(let i=0;i<48;i++){
+      await new Promise(z=>setTimeout(z,5000));
+      if(!document.body.contains(out)) return;           // left the page
+      let r; try{ r=(await adminToolState()).res; }catch(err){ continue; }
+      if(r && r.id===ask.id){ TOOL_LAST={text:`${name} - answered just now:\n`+(r.lines||[]).join("\n"), ok:r.ok}; return route(); }
+      out.textContent=`${name}: sent. Waiting for the QuickBooks PC… (${Math.round((i+1)*5/60*10)/10} min)`;
+    }
+    show(`${name}: the QuickBooks PC hasn't answered in 4 minutes. It picks this up as soon as it checks in - check that the PC is on and the Web Connector's On Demand entry has Auto-Run ticked.`, true);
+    main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=false);
+  });
+}
 let TOOL_LAST=null;   // a button's result, kept while the page refreshes its download buttons
 async function toolPost(action){
   const r = await fetch("/api/tools/"+action, {method:"POST", headers:{"X-QBSync":"1"}});
   return r.json();
 }
 pages.tools = async (main) => {
-  if(ADMIN){ main.innerHTML=`<h1>Tools</h1><p class="sub">The tools (restart, settings, Web Connector files, building the panel) are on the dashboard on the QuickBooks PC.</p>`; return; }
+  if(ADMIN) return adminTools(main);
   const t = await (await fetch("/api/tools",{cache:"no-store"})).json();
   const win = t.windows, dis = win ? "" : "disabled";
   const winNote = win ? "" : `<p class="muted">These buttons work on the Windows PC that runs QuickBooks.</p>`;
