@@ -540,19 +540,24 @@ pages.invoices = async (main) => {
 
 pages.inventory = async (main) => {
   const d = await api("/api/inventory");
-  main.innerHTML = `<h1>Stock</h1><p class="sub">QuickBooks is the master count. Each sync compares it with Shopify and, when stock sending is on, updates Shopify to match. Unposted Shopify sales are subtracted first so nothing is double-counted.</p>
+  const demoStock = SETTINGS.demo && SETTINGS.demo.stock;
+  main.innerHTML = `<h1>Stock</h1><p class="sub">${SETTINGS.push_inventory
+      ? "Stock to Shopify is on: QuickBooks is the master count. Each sync compares it with Shopify and updates Shopify to match. Unposted Shopify sales are subtracted first so nothing is double-counted."
+      : demoStock
+      ? "Demo of <strong>Stock to Shopify</strong>: \"demo: would update Shopify\" shows the counts it would send from QuickBooks (unposted Shopify sales are subtracted first). Nothing is sent - the real setting (push_inventory) is still off, so Shopify keeps its own counts."
+      : "Stock to Shopify is off (push_inventory = no): Shopify keeps its own counts. This page shows where QuickBooks and Shopify differ; nothing is sent."}</p>
     <p class="muted">${d.run_id?`From the ${d.mode} run finished ${esc(when(d.finished))}.`:""}</p><div id="t"></div>`;
   const rows = d.rows.map(r=>({...r, diff: (r.new_shopify_on_hand===""||r.shopify_on_hand==="") ? "" : (+r.new_shopify_on_hand) - (+r.shopify_on_hand)}));
   const neg = x => String(x.action).startsWith("NOT pushed");
   makeTable($("#t",main), { rows, csvName:"stock", sort:["shopify_title",1], emptyText:"No stock report yet. Run a sync first.",
-    chips:[["diff","Different",x=>x.diff!==""&&x.diff!==0],["neg","Below zero in QuickBooks",neg],["pushed","Updated this run",x=>String(x.action).startsWith("updated")],["new","New in QuickBooks",x=>String(x.quickbooks_item).endsWith("(new)")],["all","All"]],
+    chips:[["diff","Different",x=>x.diff!==""&&x.diff!==0],["neg","Below zero in QuickBooks",neg],["pushed","Updated this run",x=>String(x.action).startsWith("updated")],["would","Would update",x=>/would update/.test(String(x.action))],["new","New in QuickBooks",x=>String(x.quickbooks_item).endsWith("(new)")],["all","All"]],
     columns:[
       {k:"shopify_title",l:"Product",w:1},{k:"quickbooks_item",l:"QuickBooks item",w:1},
       {k:"quickbooks_on_hand",l:"QuickBooks",r:1},{k:"waiting_orders",l:"Waiting sales",r:1},
       {k:"shopify_on_hand",l:"Shopify",r:1},{k:"new_shopify_on_hand",l:"Should be",r:1},
       {k:"diff",l:"Change",r:1,f:x=>x.diff===""||x.diff===0?"":`<strong style="color:${x.diff<0?"var(--bad)":"var(--good)"}">${x.diff>0?"+":""}${x.diff}</strong>`},
       {k:"cost_qb",l:"QB avg cost",r:1,f:x=>money(x.cost_qb)},{k:"cost_shopify",l:"Shopify cost",r:1,f:x=>money(x.cost_shopify)},
-      {k:"action",l:"Result",f:x=>`<span class="pill ${neg(x)?"bad":String(x.action).startsWith("updated")?"good":String(x.action)==="in step"?"":"warn"}">${esc(x.action)}</span>`},
+      {k:"action",l:"Result",f:x=>`<span class="pill ${neg(x)?"bad":String(x.action).startsWith("updated")?"good":/would update/.test(String(x.action))?"brass":String(x.action)==="in step"?"":"warn"}">${esc(x.action)}</span>`},
     ]});
 };
 
@@ -1216,7 +1221,9 @@ const DEMO_PAGES = ["overview","sales","invoices","customers","products","invent
 function demoBanner(main, page){
   const d = SETTINGS.demo; if(!d || !DEMO_PAGES.includes(page||"overview")) return;
   const el=document.createElement("div"); el.className="banner demo"; el.setAttribute("role","note");
-  el.innerHTML=`<strong>Demo – not posted.</strong> Compare mode shows what this program <em>would</em> post for ${esc(niceDate(d.from))} to ${esc(niceDate(d.to))}${d.sales!=null?`: ${n0(d.sales)} sales, ${money(d.total)}`:""}. Nothing has been posted to QuickBooks${ADMIN?"":"; your real records are untouched"}. Set <strong>mode = live</strong> in config.ini when you're ready to switch.`;
+  el.innerHTML = page==="inventory" && d.stock
+    ? `<strong>Demo – not sent.</strong> This shows what <strong>Stock to Shopify</strong> would change${d.stock_changes!=null?` (${n0(d.stock_changes)} ${d.stock_changes===1?"product":"products"})`:""} if it were on. Nothing is sent to Shopify; it stays off until you set <strong>push_inventory = yes</strong> in config.ini. While GoStock receives your stock in Shopify, leave it off.`
+    : `<strong>Demo – not posted.</strong> Compare mode shows what this program <em>would</em> post for ${esc(niceDate(d.from))} to ${esc(niceDate(d.to))}${d.sales!=null?`: ${n0(d.sales)} sales, ${money(d.total)}`:""}. Nothing has been posted to QuickBooks${ADMIN?"":"; your real records are untouched"}. Set <strong>mode = live</strong> in config.ini when you're ready to switch.`;
   main.prepend(el);
 }
 function flashNext(msg,kind){ FLASH_NEXT=[msg,kind]; }
