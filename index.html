@@ -1248,17 +1248,21 @@ async function adminQueue(){
     orders.push(...d.nodes); after=d.pageInfo.hasNextPage?d.pageInfo.endCursor:null; } while(after && orders.length<1000);
   const sales={}; if(!s.demo) (await adminSales()).forEach(r=>sales[r.order_id]={kind:r.kind,total:r.total,paid:r.paid,refunded:r.refunded});   // demo sales aren't posted
   const items=queueItems(orders, sales, s.unpaid_orders);
-  const req=await adminRequest();
+  const {req, state} = await adminRequest(true);
+  // A sync the PC has started but not yet reported back on. Both times are the PC's clock.
+  const running = state && state.started_at > (st.published||0) ? state : null;
   return {queue:{count:items.length, items}, mode:s.mode, schedule_minutes:s.schedule_minutes,
           // Done once the PC has handled this click (its id comes back in the published status) or has
           // published anything since; either one ends the wait, so a clock difference can't leave it stuck.
-          pending: req && String(req.id)!==String(s.sync_request_handled||"") && req.at > (st.published||0) ? req : null,
-          running:false, listener_ok:true};
+          pending: !running && req && String(req.id)!==String(s.sync_request_handled||"") && req.at > (st.published||0) ? req : null,
+          running: !!running, remote: running, listener_ok:true};
 }
-async function adminRequest(){
-  const d=await gqlv(`{ currentAppInstallation { id metafield(namespace: "qbsync", key: "sync_request") { value } } }`);
-  SYNC.installId=d.currentAppInstallation.id; const v=d.currentAppInstallation.metafield;
-  try{ return v?JSON.parse(v.value):null; }catch(e){ return null; }
+async function adminRequest(withState){
+  const d=(await gqlv(`{ currentAppInstallation { id sr: metafield(namespace: "qbsync", key: "sync_request") { value }
+    ss: metafield(namespace: "qbsync", key: "sync_state") { value } } }`)).currentAppInstallation;
+  SYNC.installId=d.id;
+  const p=v=>{ try{ return v?JSON.parse(v.value):null; }catch(e){ return null; } };
+  return withState ? {req:p(d.sr), state:p(d.ss)} : p(d.sr);
 }
 async function requestSync(){
   if(!ADMIN){ const r=await fetch("/api/sync-now",{method:"POST",headers:{"X-QBSync":"1"}}); if(!r.ok) throw new Error("the sync program refused ("+r.status+")"); return; }
@@ -1277,7 +1281,11 @@ async function drawSyncBox(){
   const n = q.queue && !q.queue.error ? q.queue.count : null;
   const list = n ? `<details><summary>What's waiting</summary><ul>${q.queue.items.slice(0,50).map(i=>`<li>${esc(i.order)} ${esc(i.what)}${i.total!=null?" "+money(i.total):""}</li>`).join("")}</ul></details>` : "";
   let html;
-  if(q.running) html=`<button class="btn" disabled>Syncing…</button><div class="state">QuickBooks is being updated.</div>`;
+  if(q.running && q.remote){ const mins=Math.max(0,Math.round((Date.now()/1000-q.remote.started_at)/60));
+    html=`<button class="btn" disabled>Syncing…</button><div class="state ${mins>=60?"warn":""}">${mins>=60
+      ? `Started ${esc(when(q.remote.started_at))} on the QuickBooks PC and still not finished. Check the PC (Sync history and the logs there).`
+      : `On the QuickBooks PC, started ${esc(when(q.remote.started_at))}${mins?` (${mins} min)`:""}. ${q.remote.mode==="compare"?"A compare run re-checks QuickBooks and can take a few minutes. ":""}This page updates when it's done.`}</div>`; }
+  else if(q.running) html=`<button class="btn" disabled>Syncing…</button><div class="state">QuickBooks is being updated.</div>`;
   else if(q.pending || Date.now()<SYNC.busyUntil){ const age = q.pending ? Date.now()/1000-q.pending.at : 0;
     html = age>180 ? `<button class="btn" disabled>Requested</button><div class="state warn">Still waiting after ${Math.round(age/60)} minutes. ${ADMIN
         ? "Is the QuickBooks PC on, with QuickBooks, the Web Connector and the sync program running?"
@@ -1322,7 +1330,7 @@ async function adminTools(main){
   const {res, req} = await adminToolState();
   const pc = res && res.pc && (!set.pc || !set.pc.at || res.pc.at >= set.pc.at) ? res.pc : (set.pc||{});
   const seen = pc.listener_seen, stale = !seen || Date.now()/1000-seen > 180;
-  const waiting = req && (!res || res.id!==req.id) ? req : null;
+  const waiting = req && (!res || res.id!==req.id || res.working) ? req : null;
   const lr = pc.last_run || (st&&st.runs&&st.runs[0]) || null;
   const yn = v => v===true?"Yes":v===false?"No":"Unknown";
   main.innerHTML = `<h1>Tools</h1><p class="sub">These buttons reach the QuickBooks PC through your store: the PC picks them up within a minute, as long as it's on with the Web Connector's <strong>Shopify Sync - On Demand</strong> entry set to Auto-Run. Settings, the Web Connector files, the panel files and folders are on the Tools page of the dashboard on the QuickBooks PC.</p>
@@ -1344,7 +1352,8 @@ async function adminTools(main){
   const out=$(".toolout",main);
   const show=(text,bad)=>{ out.hidden=false; out.classList.toggle("bad",!!bad); out.textContent=text; };
   if(TOOL_LAST){ show(TOOL_LAST.text, !TOOL_LAST.ok); TOOL_LAST=null; }
-  else if(waiting) show(`Waiting for the QuickBooks PC: ${TOOL_NAMES[waiting.action]||waiting.action}, asked ${ago(waiting.at)}.`);
+  else if(waiting) show(res && res.id===waiting.id ? `${TOOL_NAMES[waiting.action]||waiting.action}: the QuickBooks PC is working on it…`
+                                                  : `Waiting for the QuickBooks PC: ${TOOL_NAMES[waiting.action]||waiting.action}, asked ${ago(waiting.at)}.`);
   else if(res) show(`${TOOL_NAMES[res.action]||res.action} - answered ${ago(res.at)}:\n`+(res.lines||[]).join("\n"), !res.ok);
   main.addEventListener("click", async e=>{
     const b=e.target.closest("[data-ask]"); if(!b) return;
@@ -1356,6 +1365,7 @@ async function adminTools(main){
       await new Promise(z=>setTimeout(z,5000));
       if(!document.body.contains(out)) return;           // left the page
       let r; try{ r=(await adminToolState()).res; }catch(err){ continue; }
+      if(r && r.id===ask.id && r.working){ out.textContent=`${name}: the QuickBooks PC picked it up and is working on it…`; continue; }
       if(r && r.id===ask.id){ TOOL_LAST={text:`${name} - answered just now:\n`+(r.lines||[]).join("\n"), ok:r.ok}; return route(); }
       out.textContent=`${name}: sent. Waiting for the QuickBooks PC… (${Math.round((i+1)*5/60*10)/10} min)`;
     }
