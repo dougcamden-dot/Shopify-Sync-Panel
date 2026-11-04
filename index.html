@@ -1247,7 +1247,10 @@ async function adminQueue(){
   const items=queueItems(orders, sales, s.unpaid_orders);
   const req=await adminRequest();
   return {queue:{count:items.length, items}, mode:s.mode, schedule_minutes:s.schedule_minutes,
-          pending: req && req.at*1000 > (st.published||0)*1000 ? req : null, running:false, listener_ok:true};
+          // Done once the PC has handled this click (its id comes back in the published status) or has
+          // published anything since; either one ends the wait, so a clock difference can't leave it stuck.
+          pending: req && String(req.id)!==String(s.sync_request_handled||"") && req.at > (st.published||0) ? req : null,
+          running:false, listener_ok:true};
 }
 async function adminRequest(){
   const d=await gqlv(`{ currentAppInstallation { id metafield(namespace: "qbsync", key: "sync_request") { value } } }`);
@@ -1273,7 +1276,9 @@ async function drawSyncBox(){
   let html;
   if(q.running) html=`<button class="btn" disabled>Syncing…</button><div class="state">QuickBooks is being updated.</div>`;
   else if(q.pending || Date.now()<SYNC.busyUntil){ const age = q.pending ? Date.now()/1000-q.pending.at : 0;
-    html = age>180 ? `<button class="btn" disabled>Requested</button><div class="state warn">Still waiting for the QuickBooks PC after ${Math.round(age/60)} minutes. Is it on, with QuickBooks, the Web Connector and the sync program running?</div>`
+    html = age>180 ? `<button class="btn" disabled>Requested</button><div class="state warn">Still waiting after ${Math.round(age/60)} minutes. ${ADMIN
+        ? "Is the QuickBooks PC on, with QuickBooks, the Web Connector and the sync program running?"
+        : `The Web Connector's "Shopify Sync - On Demand" entry starts it; check that its Auto-Run box is ticked, or click Update Selected in the Web Connector.`}</div>`
       : `<button class="btn" disabled>Requested</button><div class="state">Starts within a minute${ADMIN?" on the QuickBooks PC":""}. ${ADMIN?"This page updates when it's done.":""}</div>`; }
   else if(n===0) html=`<div class="state" style="margin:0"><strong style="color:var(--good)">Up to date</strong> · nothing waiting · <button class="link" data-sync>${esc(verb.replace(" now"," anyway"))}</button></div>`;
   else html=`<button class="btn primary" data-sync>${esc(verb)}${n?` · ${n} waiting`:""}</button>${list}`;
