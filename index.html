@@ -702,6 +702,7 @@ pages.reconcile = async (main) => {
           <tr><td>Date</td><td>${esc(niceDate(x.date))}</td><td>${esc(x.qb_date?niceDate(x.qb_date):"—")}</td></tr>
           <tr><td>Total</td><td>${money(x.shopify_total)}</td><td>${money(x.qb_total)}</td></tr>
           <tr><td>Sales tax</td><td>${money(x.shopify_tax)}</td><td>${money(x.qb_tax)}</td></tr>
+          ${x.shopify_tax_parts||x.qb_tax_parts?`<tr><td>Tax breakdown</td><td>${esc(x.shopify_tax_parts||"—").split("; ").join("<br>")}</td><td>${esc(x.qb_tax_parts||"—").split("; ").join("<br>")}</td></tr>`:""}
           <tr><td>Refunds</td><td>${money(x.refunds_shopify)||"—"}</td><td>${money(x.refunds_qb)||"—"}</td></tr>
           <tr><td>Customer</td><td>${esc(x.customer)}</td><td>${esc(x.qb_customer||"—")}</td></tr>
           <tr><td>Payment</td><td>${esc(x.shopify_method)} <span class="muted">${esc(x.shopify_status)}</span></td><td>${esc(x.qb_method||"—")}${x.qb_balance!==null&&x.qb_balance!==undefined?` <span class="muted">balance ${money(x.qb_balance)}</span>`:""}</td></tr></tbody></table>`}); }
