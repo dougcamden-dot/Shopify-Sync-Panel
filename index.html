@@ -1311,7 +1311,7 @@ pages.tools = async (main) => {
   const win = t.windows, dis = win ? "" : "disabled";
   const winNote = win ? "" : `<p class="muted">These buttons work on the Windows PC that runs QuickBooks.</p>`;
   const dl = (name,label,ok) => ok ? `<a class="btn" href="/api/tools/file?name=${name}" download>${label}</a>` : "";
-  main.innerHTML = `<h1>Tools</h1><p class="sub">Everything the numbered .bat files used to do. To start the program, use <strong>Shopify Sync.bat</strong>; it opens this dashboard.</p>
+  main.innerHTML = `<h1>Tools</h1><p class="sub">Restart, settings, start-up, Web Connector files and the Shopify admin panel. To start the program and open this dashboard, click the <strong>Shopify Sync</strong> shortcut (or Shopify Sync.bat).</p>
     ${t.config_error?`<div class="banner bad"><strong>config.ini has a problem:</strong> ${esc(t.config_error)}</div>`:""}
     ${winNote}
     <section class="tsec"><h2>The sync program</h2>
@@ -1319,6 +1319,8 @@ pages.tools = async (main) => {
       <div class="actions"><button class="btn" data-tool="restart" ${dis}>Restart</button> <button class="btn danger" data-tool="stop" ${dis} data-confirm="Click again to stop the sync program">Stop</button></div>
       <p style="margin-top:12px">Start with Windows: ${t.autostart===null?'<span class="state-off">unknown</span>':t.autostart?'<span class="state-on">On</span> - starts by itself (hidden) when you log in':'<span class="state-off">Off</span> - start it with Shopify Sync.bat'}</p>
       <div class="actions">${t.autostart?`<button class="btn" data-tool="autostart-off" ${dis}>Turn off</button>`:`<button class="btn" data-tool="autostart-on" ${dis}>Turn on</button>`}</div>
+      <p style="margin-top:12px">Shortcut: ${(t.shortcuts||[]).length?'<span class="state-on">On the desktop and in the Start menu</span> - click <strong>Shopify Sync</strong> to start the program and open this dashboard':'<span class="state-off">None yet</span> - a <strong>Shopify Sync</strong> icon for the desktop and Start menu, instead of the .bat file'}</p>
+      <div class="actions">${(t.shortcuts||[]).length?`<button class="btn" data-tool="shortcuts" ${dis}>Recreate</button> <button class="btn" data-tool="shortcuts-remove" ${dis}>Remove</button>`:`<button class="btn primary" data-tool="shortcuts" ${dis}>Create shortcuts</button>`}</div>
       <pre class="toolout" hidden></pre></section>
     <section class="tsec"><h2>Settings</h2>
       <p>config.ini holds your Shopify app, QuickBooks accounts, mode (preview, compare, live) and everything else. Check settings tests the Shopify connection and shows the Web Connector user name and password.</p>
@@ -1357,7 +1359,7 @@ pages.tools = async (main) => {
         try{ const n=await (await fetch("/api/tools",{cache:"no-store"})).json(); if(n.started_at!==was){ out.textContent+="Restarted."; setTimeout(()=>location.reload(),600); return; } }catch(err){ out.textContent+="."; } }
       out.textContent+="\nIt hasn't come back. Start it with Shopify Sync.bat; the reason is in the logs."; return; }
     if(r.ok && a==="stop"){ main.querySelectorAll("button").forEach(x=>x.disabled=true); return; }
-    if(r.ok && ["autostart-on","autostart-off","qwc","build-panel"].includes(a)){
+    if(r.ok && ["autostart-on","autostart-off","qwc","build-panel","shortcuts","shortcuts-remove"].includes(a)){
       TOOL_LAST={i:[...main.querySelectorAll(".tsec")].indexOf(b.closest(".tsec")), text:out.textContent, ok:r.ok}; route(); }
   });
 };
