@@ -1333,6 +1333,11 @@ async function adminToolAsk(action){
   return req;
 }
 const TOOL_NAMES = {status:"Refresh status", check:"Check settings", restart:"Restart"};
+function toolStuck(name, action){
+  return action==="restart"
+    ? `${name}: the QuickBooks PC started restarting but the sync program hasn't reported back. It may not have started again: on the QuickBooks PC, click the Shopify Sync icon (or Shopify Sync.bat). The reason is in logs\\sync.log there.`
+    : `${name}: the QuickBooks PC picked this up but didn't finish. The reason is in logs\\sync.log on the QuickBooks PC (search for "Tool"). Try again, or use the Tools page on the PC.`;
+}
 async function adminTools(main){
   AD.loadedAt=0; const st=await adminStatus(); const set=(st&&st.settings)||{};
   const {res, req} = await adminToolState();
@@ -1360,24 +1365,26 @@ async function adminTools(main){
   const out=$(".toolout",main);
   const show=(text,bad)=>{ out.hidden=false; out.classList.toggle("bad",!!bad); out.textContent=text; };
   if(TOOL_LAST){ show(TOOL_LAST.text, !TOOL_LAST.ok); TOOL_LAST=null; }
-  else if(waiting) show(res && res.id===waiting.id ? `${TOOL_NAMES[waiting.action]||waiting.action}: the QuickBooks PC is working on it…`
-                                                  : `Waiting for the QuickBooks PC: ${TOOL_NAMES[waiting.action]||waiting.action}, asked ${ago(waiting.at)}.`);
+  else if(waiting){ const nm=TOOL_NAMES[waiting.action]||waiting.action;
+    if(res && res.id===waiting.id){ const old=Date.now()/1000-(res.at||waiting.at) > 180;
+      show(old ? toolStuck(nm, waiting.action) : `${nm}: ${(res.lines||["the QuickBooks PC is working on it…"]).join(" ")}`, old); }
+    else show(`Waiting for the QuickBooks PC: ${nm}, asked ${ago(waiting.at)}.`); }
   else if(res) show(`${TOOL_NAMES[res.action]||res.action} - answered ${ago(res.at)}:\n`+(res.lines||[]).join("\n"), !res.ok);
   main.addEventListener("click", async e=>{
     const b=e.target.closest("[data-ask]"); if(!b) return;
     if(b.dataset.confirm && !confirmInline(b,b.dataset.confirm)) return;
     main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=true);
     let ask; try{ ask=await adminToolAsk(b.dataset.ask); }catch(err){ show("Couldn't send it: "+err.message, true); main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=false); return; }
-    const name=TOOL_NAMES[ask.action]; show(`${name}: sent. Waiting for the QuickBooks PC (usually under a minute)…`);
+    const name=TOOL_NAMES[ask.action]; let picked=false; show(`${name}: sent. Waiting for the QuickBooks PC (usually under a minute)…`);
     for(let i=0;i<48;i++){
       await new Promise(z=>setTimeout(z,5000));
       if(!document.body.contains(out)) return;           // left the page
       let r; try{ r=(await adminToolState()).res; }catch(err){ continue; }
-      if(r && r.id===ask.id && r.working){ out.textContent=`${name}: the QuickBooks PC picked it up and is working on it…`; continue; }
+      if(r && r.id===ask.id && r.working){ picked=true; out.textContent=`${name}: ${(r.lines||[]).join(" ")||"the QuickBooks PC picked it up and is working on it…"}`; continue; }
       if(r && r.id===ask.id){ TOOL_LAST={text:`${name} - answered just now:\n`+(r.lines||[]).join("\n"), ok:r.ok}; return route(); }
       out.textContent=`${name}: sent. Waiting for the QuickBooks PC… (${Math.round((i+1)*5/60*10)/10} min)`;
     }
-    show(`${name}: the QuickBooks PC hasn't answered in 4 minutes. It picks this up as soon as it checks in - check that the PC is on and the Web Connector's On Demand entry has Auto-Run ticked.`, true);
+    show(picked ? toolStuck(name, ask.action) : `${name}: the QuickBooks PC hasn't answered in 4 minutes. It picks this up as soon as it checks in - check that the PC is on and the Web Connector's On Demand entry has Auto-Run ticked.`, true);
     main.querySelectorAll("[data-ask]").forEach(x=>x.disabled=false);
   });
 }
