@@ -211,7 +211,8 @@ tr.hit td{background:var(--good-pale)}
     <a href="#pos" data-page="pos" class="purch" hidden>Purchase orders</a>
     <a href="#reorder" data-page="reorder" class="purch" hidden>Reorder</a>
     <a href="#counts" data-page="counts" class="purch" hidden>Stock counts</a>
-    <a href="#labels" data-page="labels" class="purch" hidden>Labels</a>
+    <a href="#adjust" data-page="adjust" class="adjon" hidden>Adjust stock</a>
+    <a href="#labels" data-page="labels" class="stockon" hidden>Labels</a>
     <a href="#value" data-page="value" class="purch" hidden>Stock value</a>
     <a href="#problems" data-page="problems">Problems <span class="count" id="n-prob" hidden></span></a>
     <div class="syncbox" id="syncbox" aria-live="polite"></div>
@@ -288,6 +289,7 @@ async function adminApi(path){
   if(route==="/api/reconcile"){ const keys=(st.index||{}).recon||[]; if(!keys.length) return {empty:true};
     await loadKeys(keys); return {...AD.parts[keys[0]], orders: await adminTable("reconorders")}; }
   if(route==="/api/inventory") return {...st.meta.inventory, rows: await adminTable("inventory")};
+  if(route==="/api/costs") return {...((st.meta||{}).costs||{}), rows: (st.index||{}).costs ? await adminTable("costs") : []};
   if(route==="/api/purchases") return {...((st.meta||{}).purchases||{}), rows: (st.index||{}).purchases ? await adminTable("purchases") : []};
   if(route==="/api/products") return {linked: st.meta.products.linked, rows: await adminTable("products")};
   if(route==="/api/customers") return {linked: st.meta.customers.linked, rows: await adminTable("customers"), top: await adminTable("topcustomers")};
@@ -540,7 +542,8 @@ pages.invoices = async (main) => {
 };
 
 pages.inventory = async (main, arg) => {
-  const [d, pu] = await Promise.all([api("/api/inventory"), api("/api/purchases").catch(()=>({rows:[]}))]);
+  const [d, pu, co] = await Promise.all([api("/api/inventory"), api("/api/purchases").catch(()=>({rows:[]})), api("/api/costs").catch(()=>({rows:[]}))]);
+  const coFlag = (co.rows||[]).filter(x=>x.flags).length;
   const demoStock = SETTINGS.demo && SETTINGS.demo.stock;
   main.innerHTML = `<h1>Stock</h1><p class="sub">${SETTINGS.push_inventory
       ? "Stock to Shopify is on: QuickBooks is the master count. Each sync compares it with Shopify and updates Shopify to match. Unposted Shopify sales are subtracted first so nothing is double-counted."
@@ -548,11 +551,11 @@ pages.inventory = async (main, arg) => {
       ? "Demo of <strong>Stock to Shopify</strong>: \"demo: would update Shopify\" shows the counts it would send from QuickBooks (unposted Shopify sales are subtracted first). Nothing is sent - the real setting (push_inventory) is still off, so Shopify keeps its own counts."
       : "Stock to Shopify is off (push_inventory = no): Shopify keeps its own counts. This page shows where QuickBooks and Shopify differ; nothing is sent."}</p>
     <p class="muted">${d.run_id?`Counts from the ${d.mode} run finished ${esc(when(d.finished))}. A purchase entered in QuickBooks shows here after the next sync.`:""}</p>
-    <div class="subtabs" role="tablist">${[["counts","Stock counts"],["purchases",`Purchases in QuickBooks (${(pu.rows||[]).length})`]].map(([k,l])=>`<button role="tab" type="button" data-t="${k}">${esc(l)}</button>`).join("")}</div><div id="t"></div>`;
+    <div class="subtabs" role="tablist">${[["counts","Stock counts"],["purchases",`Purchases in QuickBooks (${(pu.rows||[]).length})`],["costs",`Cost history${coFlag?` (${coFlag} flagged)`:""}`]].map(([k,l])=>`<button role="tab" type="button" data-t="${k}">${esc(l)}</button>`).join("")}</div><div id="t"></div>`;
   const show = k => { main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); });
-    return k==="purchases" ? drawPurchases($("#t",main), pu) : drawCounts($("#t",main), d); };
+    return k==="purchases" ? drawPurchases($("#t",main), pu) : k==="costs" ? drawCosts($("#t",main), co) : drawCounts($("#t",main), d); };
   main.querySelectorAll(".subtabs button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.t)));
-  show(arg==="purchases" ? "purchases" : "counts");
+  show(["purchases","costs"].includes(arg) ? arg : "counts");
 };
 
 function drawPurchases(host, pu){
@@ -570,6 +573,25 @@ function drawPurchases(host, pu){
       {k:"items",l:"Units",r:1},{k:"total",l:"Total",r:1,f:x=>money(x.total)},
       {k:"paid",l:"Paid"},
       {k:"status",l:"Lines",f:x=>x.status==="ok"?`<span class="pill good">${x.lines_ok} linked</span>`:`<span class="pill warn">${esc(x.note)}</span>`}]});
+}
+
+function drawCosts(host, co){
+  const rows=(co.rows||[]).map((x,i)=>({...x,__id:i}));
+  const pct = v => v===null||v===undefined||v==="" ? "" : `<strong style="color:${v>0?"var(--bad)":"var(--good)"}">${v>0?"+":""}${v}%</strong>`;
+  host.innerHTML=`<p class="sub">What you've paid for each item, from the Bills and Item Receipts in QuickBooks${co.since?` since ${esc(shortDate(co.since))}`:""} (GoStock's included). Flagged: the latest cost is ${esc(co.pct||10)}% or more above or below the purchase before it, or Shopify's cost is that far from the latest purchase cost. Click an item for every purchase.</p><div id="ctab"></div>`;
+  const chips=[["flag","Flagged",x=>!!x.flags],["changed","Cost changed",x=>/cost changed/.test(x.flags)],["shop","Shopify cost differs",x=>/Shopify/.test(x.flags)],["all","All"]];
+  if(!rows.some(x=>x.flags)) chips.push(chips.shift());
+  makeTable($("#ctab",host),{rows, csvName:"cost_history", chips, sort:["last_date",-1],
+    emptyText:"No purchase costs yet. They're read from QuickBooks on the next sync.",
+    detail:x=>`<table class="lines"><thead><tr><th>Date</th><th>Supplier</th><th>No.</th><th class="r">Qty</th><th class="r">Unit cost</th><th class="r">Change</th></tr></thead><tbody>
+      ${(x.history||"").split("; ").filter(Boolean).map(l=>l.split("|")).map(([dt,v,r,q,c],i,all)=>{ const nx=all[i+1]; const ch=nx&&num(nx[4])?Math.round((num(c)-num(nx[4]))/num(nx[4])*1000)/10:null;
+        return `<tr><td>${esc(shortDate(dt))}</td><td>${esc(v)}</td><td>${esc(r)}</td><td class="r">${esc(+q)}</td><td class="r">${money(c)}</td><td class="r">${ch===null||ch===0?"":pct(ch)}</td></tr>`; }).join("")}</tbody></table>
+      <p class="muted">Lowest ${money(x.low)} · highest ${money(x.high)} · average paid ${money(x.avg_paid)}${x.qb_avg!==null&&x.qb_avg!==undefined?` · QuickBooks average cost ${money(x.qb_avg)}`:""}</p>`,
+    columns:[{k:"product",l:"Product",w:1,v:x=>`${x.product} ${x.item}`,sv:x=>x.product||x.item,csv:x=>`${x.product} (QuickBooks: ${x.item})`,f:x=>`${esc(x.product||"—")}<div class="muted">QuickBooks: ${esc(x.item)}</div>`},
+      {k:"last_cost",l:"Latest cost",r:1,f:x=>money(x.last_cost)},{k:"last_date",l:"Bought",v:x=>`${x.last_date} ${x.last_vendor}`,sv:x=>x.last_date,csv:x=>`${x.last_date} ${x.last_vendor} ${x.last_ref}`,f:x=>`${esc(shortDate(x.last_date))}<div class="muted">${esc(x.last_vendor)}</div>`},
+      {k:"prev_cost",l:"Before that",r:1,f:x=>x.prev_cost===null?"":money(x.prev_cost)},{k:"change_pct",l:"Change",r:1,f:x=>pct(x.change_pct),sv:x=>x.change_pct===null?-1e9:Math.abs(x.change_pct)},
+      {k:"shopify_cost",l:"Shopify cost",r:1,f:x=>x.shopify_cost===null?"":money(x.shopify_cost)},
+      {k:"flags",l:"",f:x=>x.flags?`<span class="pill warn">${esc(x.flags)}</span>`:""}]});
 }
 
 function drawCounts(host, d){
@@ -759,10 +781,12 @@ pages.reconcile = async (main) => {
 const PURCH = { cat:null, catAt:0, suppliers:null, pos:null, counts:null };
 const T_SUP = "$app:qb_supplier", T_PO = "$app:qb_purchase_order", T_CNT = "$app:qb_stock_count";
 const purchOn = () => ADMIN && SETTINGS.purchasing && SETTINGS.purchasing.enabled;
+const adjOn = () => ADMIN && SETTINGS.adjustments && SETTINGS.adjustments.enabled;
 const legacy = gid => String(gid||"").split("/").pop();
 const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
 const int = v => { const n = parseInt(v,10); return isFinite(n) ? n : 0; };
 const nowIso = () => new Date().toISOString();
+const localDay = iso => { const t=new Date(iso||""); if(isNaN(t)) return ""; return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`; };
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2));
 
 async function gqlv(query, variables){
@@ -832,7 +856,7 @@ async function saveMeta(type, rec, keys){
 async function loadSuppliers(force){ if(!PURCH.suppliers||force) PURCH.suppliers=(await listMeta(T_SUP)).sort((a,b)=>a.name.localeCompare(b.name)); return PURCH.suppliers; }
 async function loadPOs(force){ if(!PURCH.pos||force) PURCH.pos=(await listMeta(T_PO)).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true})); return PURCH.pos; }
 async function loadCounts(force){ if(!PURCH.counts||force) PURCH.counts=(await listMeta(T_CNT)).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true})); return PURCH.counts; }
-function nextNumber(list, prefix){ let n=1000; list.forEach(r=>{ const m=String(r.name).match(/(\d+)$/); if(m) n=Math.max(n,int(m[1])); }); return `${prefix}-${n+1}`; }
+function nextNumber(list, prefix){ let n=1000; list.forEach(r=>{ const m=String(r.name).match(/^([A-Za-z]+)-?(\d+)$/); if(m&&m[1].toUpperCase()===prefix) n=Math.max(n,int(m[2])); }); return `${prefix}-${n+1}`; }
 function onOrder(){ const m={}; (PURCH.pos||[]).forEach(p=>{ if(p.status==="ordered"||p.status==="partial") (p.data.lines||[]).forEach(l=>{ m[l.variant_id]=(m[l.variant_id]||0)+Math.max(0,int(l.qty)-int(l.received)); }); }); return m; }
 async function loadVelocity(){ try{ await adminStatus(); const keys=(AD.status.index||{}).velocity||[]; await loadKeys(keys); return keys.length?AD.parts[keys[0]]:{}; }catch(e){ return {}; } }
 
@@ -901,7 +925,7 @@ pages.pos = async (main) => {
     chips:[["open","Open",x=>["draft","ordered","partial"].includes(x.status)],["received","Received",x=>x.status==="received"],["all","All"]],
     columns:[{k:"name",l:"PO",f:x=>`<a href="#po/${esc(legacy(x.id))}">${esc(x.name)}</a>`,v:x=>x.name,sv:x=>int(String(x.name).replace(/\D/g,""))},
       {k:"supplier",l:"Supplier"},{k:"status",l:"Status",f:x=>pill(poStatus(x.status))},
-      {k:"created",l:"Created",nw:1,v:x=>shortDate((x.data.created_at||"").slice(0,10)),sv:x=>x.data.created_at||""},
+      {k:"created",l:"Created",nw:1,v:x=>shortDate(localDay(x.data.created_at)),sv:x=>x.data.created_at||""},
       {k:"expected",l:"Expected",nw:1,v:x=>x.data.expected?shortDate(x.data.expected):""},
       {k:"items",l:"Lines",r:1},{k:"total",l:"Cost",r:1,f:x=>money(x.total)},{k:"pct",l:"Received",r:1,f:x=>x.status==="draft"?"":x.pct+"%"},
       {k:"qb",l:"QuickBooks",f:qbState,nosort:1}]});
@@ -913,12 +937,15 @@ pages.po = async (main, arg) => {
   let po = arg==="new" ? null : pos.find(p=>legacy(p.id)===arg);
   if(!po && arg!=="new"){ main.innerHTML=`<a class="back" href="#pos">All purchase orders</a><p>That purchase order wasn't found.</p>`; return; }
   const draftSeed = JSON.parse(sessionStorage.getItem("po_seed")||"null"); sessionStorage.removeItem("po_seed");
+  const justId = sessionStorage.getItem("just_received"); sessionStorage.removeItem("just_received");
   if(!po) po = { name: nextNumber(pos,"PO"), status:"draft", supplier: draftSeed?.supplier||"", data:{ created_at: nowIso(), lines: draftSeed?.lines||[], receipts:[] }, qb:{} };
   const editable = po.status==="draft"||po.status==="ordered";
   const render = () => {
     const d=po.data, lines=d.lines||[]; const total=lines.reduce((a,l)=>a+int(l.qty)*num(l.cost),0);
+    const justRc = po.id && (d.receipts||[]).find(r=>r.id===justId);
     main.innerHTML=`<a class="back" href="#pos">All purchase orders</a>
-      <div class="toprow"><div><h1>${esc(po.name)} ${pill(poStatus(po.status))}</h1><p class="sub" style="margin:0">${po.id?`Created ${esc(shortDate((d.created_at||"").slice(0,10)))}`:"Not saved yet"}${d.ordered_at?`, ordered ${esc(shortDate(d.ordered_at.slice(0,10)))}`:""}</p></div>
+      ${justRc?`<div class="banner good" role="status">Delivery received: ${justRc.lines.reduce((a,l)=>a+int(l.qty),0)} items. <button class="btn" data-a="rclabels">Print labels for this delivery</button></div>`:""}
+      <div class="toprow"><div><h1>${esc(po.name)} ${pill(poStatus(po.status))}</h1><p class="sub" style="margin:0">${po.id?`Created ${esc(shortDate(localDay(d.created_at)))}`:"Not saved yet"}${d.ordered_at?`, ordered ${esc(shortDate(localDay(d.ordered_at)))}`:""}</p></div>
       <div class="actions">${po.id?`<button class="btn" data-a="print">Print / PDF</button>`:""}${po.id&&po.status!=="draft"&&po.status!=="cancelled"&&po.status!=="received"?`<a class="btn primary" href="#receive/${esc(legacy(po.id))}">Receive delivery</a>`:""}</div></div>
       <form class="form" id="f">
         <label>Supplier<select name="supplier" ${editable?"":"disabled"} required><option value="">Choose…</option>${sups.map(s=>`<option ${s.name===po.supplier?"selected":""}>${esc(s.name)}</option>`).join("")}</select></label>
@@ -963,7 +990,7 @@ pages.po = async (main, arg) => {
     const saved=await saveMeta(T_PO, po, ["name","status","supplier","data"]); po={...po, ...saved}; PURCH.pos=null; return po; };
   main.addEventListener("input", e=>{ if(e.target.matches("tr[data-i] input")){ const tr=e.target.closest("tr"); const l=po.data.lines[int(tr.dataset.i)];
     const q=int($('input[data-k="qty"]',tr).value), c=num($('input[data-k="cost"]',tr).value); tr.children[5].textContent=money(q*c); } });
-  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return; const a=b.dataset.a;
+  main.addEventListener("click", async e=>{ const rl=e.target.closest('[data-a="rclabels"]'); if(rl){ const rc=(po.data.receipts||[]).find(r=>r.id===justId); if(rc) goLabels(rc.lines, "#po/"+legacy(po.id)); return; } const b=e.target.closest("[data-a]"); if(!b) return; const a=b.dataset.a;
     if(a==="del"){ collect(); po.data.lines.splice(int(b.closest("tr").dataset.i),1); render(); return; }
     if(a==="print"){ collect(); printPO(po); return; }
     if(a==="cancel" && !confirmInline(b,"Click again to cancel this order")) return;
@@ -1046,7 +1073,8 @@ pages.receive = async (main, arg) => {
         const before=Math.max(0,v.onHand); const cost = SETTINGS.purchasing.cost_method==="average" && before>0 && v.cost>0 ? (before*v.cost + l.now*l.newCost)/(before+l.now) : l.newCost;
         if(Math.abs(cost-v.cost)>=0.005){ try{ userErrs((await gqlv(SET_COST,{id:l.inventory_item_id, input:{cost:cost.toFixed(2)}})).inventoryItemUpdate); }catch(err){ flash(main,`Cost for ${l.title} wasn't updated: ${err.message}`,"bad"); } } }
       await finishSave(rc);
-      location.hash="#po/"+legacy(po.id); flashNext(`Received ${got.reduce((a,l)=>a+l.now,0)} items. Shopify stock is updated; QuickBooks gets it on the next sync.`,"good");
+      sessionStorage.setItem("just_received", rc.id);
+      location.hash="#po/"+legacy(po.id); flashNext(`Shopify stock is updated; QuickBooks gets the delivery on the next sync.`,"good");
     }catch(err){ flash(main,(pending?"Stock was received in Shopify, but saving the purchase order failed: ":"Nothing was received: ")+err.message,"bad"); render(); }
   });
   render();
@@ -1103,7 +1131,7 @@ pages.reorder = async (main) => {
 
 /* ---------- Stock counts ---------- */
 pages.counts = async (main) => {
-  const [counts, cat] = await Promise.all([loadCounts(true), loadCatalog()]);
+  const [allCounts, cat] = await Promise.all([loadCounts(true), loadCatalog()]); const counts=allCounts.filter(c=>c.data.kind!=="adjust");
   const types=[...new Set(cat.list.filter(v=>v.tracked).map(v=>v.type).filter(Boolean))].sort();
   const sups=[...new Set(cat.list.map(v=>(v.rule||{}).supplier).filter(Boolean))].sort();
   main.innerHTML=`<div class="toprow"><div><h1>Stock counts</h1><p class="sub">Count what's on the shelf, review the differences, then apply them. Shopify is corrected immediately; the next sync posts the adjustment to QuickBooks.</p></div></div>
@@ -1115,7 +1143,7 @@ pages.counts = async (main) => {
   makeTable($("#t",main),{rows:counts.map(c=>({...c,__id:c.id})), search:false, csvName:"stock_counts", emptyText:"No counts yet.",
     columns:[{k:"name",l:"Count",f:x=>`<a href="#count/${esc(legacy(x.id))}">${esc(x.name)}</a>`},{k:"scope",l:"What",v:x=>x.data.scope_label||""},
       {k:"status",l:"Status",f:x=>pill({open:["brass","In progress"],applied:["good","Applied"],cancelled:["bad","Cancelled"]}[x.status]||["",x.status])},
-      {k:"lines",l:"Products",r:1,v:x=>(x.data.lines||[]).length},{k:"created",l:"Started",nw:1,v:x=>shortDate((x.data.created_at||"").slice(0,10))},
+      {k:"lines",l:"Products",r:1,v:x=>(x.data.lines||[]).length},{k:"created",l:"Started",nw:1,v:x=>shortDate(localDay(x.data.created_at))},
       {k:"qb",l:"QuickBooks",nosort:1,f:x=>x.status!=="applied"?"":x.qb.error?`<span class="pill bad">${esc(x.qb.error)}</span>`:(x.qb.txn||x.qb.empty)?'<span class="pill good">In QuickBooks</span>':'<span class="pill warn">Waiting for sync</span>'}]});
   $("#f",main).addEventListener("submit", async e=>{ e.preventDefault(); const btn=e.submitter; const sc=e.target.scope.value; setBusy(btn,true,"Starting…");
     try{ await loadCatalog(true); let items=PURCH.cat.list.filter(v=>v.tracked&&v.status==="ACTIVE"), label="All stock-tracked products";
@@ -1149,7 +1177,8 @@ pages.count = async (main, arg) => {
         ${review||!open?`<td class="r">${df===null?"":`<strong style="color:${df<0?"var(--bad)":"var(--good)"}">${df>0?"+":""}${df}</strong>`}</td><td class="r">${df===null?"":money(df*num(l.cost))}</td>`:""}</tr>`; }).join("")||'<tr><td colspan="5" class="empty">No differences. Everything counted matches Shopify.</td></tr>'}
       </tbody></table></div>
       ${open&&review?`<p class="muted">Products left blank aren't changed.</p><div class="actions"><button class="btn primary" data-a="apply">Apply ${diffs.length} correction${diffs.length===1?"":"s"}</button> <button class="btn danger" data-a="cancel">Cancel this count</button></div>`:""}
-      ${c.status==="applied"?`<p class="muted">Applied ${esc(new Date(d.applied_at).toLocaleString("en-US"))}.</p>`:""}`;
+      ${c.status==="applied"?`<p class="muted">Applied ${esc(new Date(d.applied_at).toLocaleString("en-US"))}.</p>
+        <div class="actions"><button class="btn" data-a="cntlabels">Print labels for what was counted (${lines.filter(l=>int(l.counted)>0).reduce((a,l)=>a+int(l.counted),0)})</button></div>`:""}`;
     if($("#scan",main)) $("#scan",main).focus(); };
   const collect=()=>main.querySelectorAll('tr[data-i] input[data-k="counted"]').forEach(inp=>{ const l=d.lines[int(inp.closest("tr").dataset.i)]; l.counted= inp.value===""?null:int(inp.value); });
   const save=async(keys=["name","status","data"])=>{ const s=await saveMeta(T_CNT,c,keys); c={...c,...s}; PURCH.counts=null; };
@@ -1157,6 +1186,7 @@ pages.count = async (main, arg) => {
     const i=v?d.lines.findIndex(l=>l.variant_id===v.id):-1; if(i<0){ flash(main,v?`${v.title} isn't part of this count.`:"No product has that barcode.","bad"); return; }
     d.lines[i].counted=int(d.lines[i].counted)+1; render(); const tr=main.querySelector(`tr[data-i="${i}"]`); if(tr){ tr.classList.add("hit"); tr.scrollIntoView({block:"nearest"}); } } });
   main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return; if(c.status==="open"&&!review) collect();
+    if(b.dataset.a==="cntlabels"){ goLabels(d.lines.filter(l=>int(l.counted)>0).map(l=>({variant_id:l.variant_id, qty:int(l.counted)})), "#count/"+arg); return; }
     if(b.dataset.a==="review"){ review=!review; render(); return; }
     if(b.dataset.a==="cancel"){ if(!confirmInline(b,"Click again to cancel")) return; c.status="cancelled"; await save(); render(); return; }
     setBusy(b,true,b.dataset.a==="apply"?"Applying…":"Saving…");
@@ -1166,6 +1196,87 @@ pages.count = async (main, arg) => {
         changes:adj.map(a=>({delta:a.delta, inventoryItemId:a.inventory_item_id, locationId:SETTINGS.location_id, changeFromQuantity:null}))}})).inventoryAdjustQuantities); }
       d.adjustments=adj; d.applied_at=nowIso(); c.status="applied"; await save(); PURCH.cat=null; review=false; render(); flash(main,`Applied ${adj.length} correction${adj.length===1?"":"s"}. QuickBooks gets them on the next sync.`,"good");
     }catch(err){ flash(main,"Couldn't finish: "+err.message,"bad"); setBusy(b,false); } });
+  render();
+};
+
+/* ---------- Stock adjustments ---------- */
+const ADJ_REASONS = () => (SETTINGS.adjustments||{}).reasons || {damaged:"Damaged",lost:"Lost or stolen",used:"Used on a job / in the shop",returned:"Returned to supplier",found:"Found / correction",restock:"Customer return put back in stock",other:"Other"};
+const SHOP_REASON = {damaged:"damaged",lost:"shrinkage",used:"other",returned:"other",found:"correction",restock:"restock",other:"other"};
+function adjQb(x){ if(x.status==="cancelled") return '<span class="pill">Cancelled - nothing changed</span>'; if(x.status==="pending") return '<span class="pill warn">Not finished</span>'; if(x.status!=="applied") return "";
+  if(x.qb.error) return `<span class="pill bad">${esc(x.qb.error)}</span>`;
+  if(x.qb.txn||x.qb.empty) return '<span class="pill good">In QuickBooks</span>';
+  return (SETTINGS.adjustments||{}).posts===false ? '<span class="pill warn">Waits for live mode</span>' : '<span class="pill warn">Waiting for sync</span>'; }
+function goLabels(lines, back){ const list=lines.filter(l=>int(l.qty)>0).map(l=>({id:l.variant_id, qty:int(l.qty)})); sessionStorage.setItem("labels",JSON.stringify(list)); if(back) sessionStorage.setItem("labels_back",back); location.hash="#labels"; }
+async function applyAdjustment({reason, note, lines, source}){
+  const adj=lines.filter(l=>int(l.delta)!==0).map(l=>({variant_id:l.variant_id, inventory_item_id:l.inventory_item_id, title:l.title, delta:int(l.delta), before:int(l.before), cost:num(l.cost)}));
+  if(!adj.length) throw new Error("Enter how many to add or take away.");
+  const key=uuid(); const data={kind:"adjust", reason, reason_label:ADJ_REASONS()[reason]||reason, note, source:source||"admin", created_at:nowIso(), key, adjustments:adj};
+  /* 1. reserve the number (a "pending" record is never posted), 2. change Shopify stock, 3. mark it applied */
+  let rec=null;
+  for(let tries=0; !rec; tries++){ const name=nextNumber(await loadCounts(true),"ADJ");
+    try{ rec=await saveMeta(T_CNT,{name, handle:name.toLowerCase(), status:"pending", data},["name","status","data"]); }
+    catch(err){ if(tries>=3||!/taken|exists/i.test(err.message)) throw err; } }
+  const tracked=adj.filter(a=>(PURCH.cat.byId[a.variant_id]||{}).tracked!==false);
+  try{ if(tracked.length) userErrs((await gqlv(ADJUST,{key, input:{name:"available", reason:SHOP_REASON[reason]||"other", referenceDocumentUri:`app://quickbooks-sync/stock-adjustment/${rec.name}`,
+      changes:tracked.map(a=>({delta:a.delta, inventoryItemId:a.inventory_item_id, locationId:SETTINGS.location_id, changeFromQuantity:null}))}})).inventoryAdjustQuantities); }
+  catch(err){ rec.status="cancelled"; rec.data.error=err.message; try{ await saveMeta(T_CNT,rec,["status","data"]); }catch(e2){} PURCH.counts=null; throw new Error("Nothing was changed: "+err.message); }
+  rec.status="applied"; rec.data.applied_at=nowIso();
+  try{ rec=await saveMeta(T_CNT,rec,["status","data"]); }
+  catch(err){ localStorage.setItem("adj_unsaved", JSON.stringify(rec)); PURCH.counts=null; throw new Error(`Shopify stock was changed, but ${rec.name} wasn't marked as done (${err.message}). Click "Finish saving it" above.`); }
+  PURCH.counts=null; PURCH.cat=null; return rec;
+}
+pages.adjust = async (main, arg) => {
+  const [recs] = await Promise.all([loadCounts(true), loadCatalog(true)]);
+  const adjs = recs.filter(c=>c.data.kind==="adjust");
+  const reasons = ADJ_REASONS();
+  if(arg){ const x=adjs.find(c=>legacy(c.id)===arg); if(!x){ main.innerHTML=`<a class="back" href="#adjust">Adjust stock</a><p>That adjustment wasn't found.</p>`; return; }
+    const d=x.data, ups=(d.adjustments||[]).filter(a=>a.delta>0);
+    main.innerHTML=`<a class="back" href="#adjust">Adjust stock</a><div class="toprow"><div><h1>${esc(x.name)}: ${esc(d.reason_label||d.reason)}</h1>
+      <p class="sub" style="margin:0">${esc(new Date(d.applied_at).toLocaleString("en-US"))}${d.source==="pos"?" · on the POS":""}${d.note?" · "+esc(d.note):""} · ${adjQb(x)}</p></div>
+      <div class="actions">${ups.length?`<button class="btn" data-a="labels">Print labels for the ${ups.reduce((a,l)=>a+l.delta,0)} added</button>`:""}</div></div>
+      <div class="tablewrap"><table><thead><tr><th>Product</th><th class="r">Before</th><th class="r">Change</th><th class="r">After</th><th class="r">Value at cost</th></tr></thead><tbody>
+      ${(d.adjustments||[]).map(a=>`<tr><td>${esc(a.title)}</td><td class="r">${int(a.before)}</td><td class="r"><strong style="color:${a.delta<0?"var(--bad)":"var(--good)"}">${a.delta>0?"+":""}${a.delta}</strong></td><td class="r">${int(a.before)+int(a.delta)}</td><td class="r">${money(a.delta*num(a.cost))}</td></tr>`).join("")}</tbody></table></div>
+      ${x.qb.ref?`<p class="muted">QuickBooks Inventory Adjustment ${esc(x.qb.ref)}.</p>`:""}`;
+    main.addEventListener("click",e=>{ if(e.target.closest('[data-a="labels"]')) goLabels(ups.map(a=>({variant_id:a.variant_id, qty:a.delta})), "#adjust/"+arg); });
+    return; }
+  const unsaved = JSON.parse(localStorage.getItem("adj_unsaved")||"null");
+  const lines=[];
+  const render=()=>{
+    main.innerHTML=`<div class="toprow"><div><h1>Adjust stock</h1><p class="sub">Add or take away stock with a reason - damaged, lost, used on a job, returned. Shopify changes right away; ${(SETTINGS.adjustments||{}).posts===false?"QuickBooks gets an Inventory Adjustment once the sync runs in live mode (or with [adjustments] post_in_compare = yes)":"the next sync enters an Inventory Adjustment in QuickBooks"}.</p></div></div>
+      ${unsaved?`<div class="banner bad">Adjustment ${esc(unsaved.name)} changed Shopify stock but wasn't saved. <button class="btn" data-a="finish">Finish saving it</button></div>`:""}
+      <form class="form" id="adjf" onsubmit="return false"><label>Reason<select name="reason">${Object.entries(reasons).map(([k,l])=>`<option value="${esc(k)}">${esc(l)}</option>`).join("")}</select></label>
+        <label>Note (optional)<input name="note" maxlength="200" placeholder="Job, invoice or who"></label></form>
+      <div class="tools"><div id="pick" style="flex:1;max-width:560px"></div></div>
+      <div class="tablewrap"><table class="edit"><thead><tr><th>Product</th><th class="r">On hand</th><th class="r">Add (+) or take away (-)</th><th class="r">New on hand</th><th class="r">Value</th><th></th></tr></thead><tbody>
+      ${lines.map((l,i)=>`<tr data-i="${i}"><td>${esc(l.title)}${l.tracked?"":' <span class="pill warn">not stock-tracked</span>'}</td><td class="r">${l.before}</td>
+        <td class="r"><input class="n" type="number" step="1" value="${l.delta}" data-k="delta" aria-label="Change for ${esc(l.title)}"></td><td class="r">${l.before+int(l.delta)}</td><td class="r">${money(int(l.delta)*l.cost)}</td><td><button class="link" data-a="del">Remove</button></td></tr>`).join("")
+        ||'<tr><td colspan="6" class="empty">Scan a barcode or type a product name above.</td></tr>'}</tbody></table></div>
+      <div class="actions" style="margin-top:14px"><button class="btn primary" data-a="apply" ${lines.length?"":"disabled"}>Apply adjustment</button></div>
+      <h2>Past adjustments</h2><div id="t"></div>`;
+    $("#pick",main).appendChild(productPicker(v=>{ keep(); const step=["found","restock"].includes((saved_form||{}).reason)?1:-1;
+      const ex=lines.find(l=>l.variant_id===v.id); if(ex) ex.delta=int(ex.delta)+step;
+      else lines.push({variant_id:v.id, inventory_item_id:v.invId, title:v.title, before:v.onHand, cost:v.cost, tracked:v.tracked, delta:step}); rerender(); $("#pick input",main).focus(); }, "Scan or type a product (each scan: 1 more taken away; added for found or customer return)"));
+    makeTable($("#t",main),{rows:adjs.map(c=>({...c,__id:c.id})), search:true, csvName:"stock_adjustments", emptyText:"No adjustments yet.", sort:["name",-1],
+      columns:[{k:"name",l:"No.",f:x=>`<a href="#adjust/${esc(legacy(x.id))}">${esc(x.name)}</a>`,sv:x=>int(String(x.name).replace(/\D/g,""))},
+        {k:"date",l:"Date",nw:1,v:x=>localDay(x.data.applied_at),f:x=>esc(shortDate(localDay(x.data.applied_at)))},
+        {k:"reason",l:"Reason",v:x=>x.data.reason_label||x.data.reason},{k:"note",l:"Note",v:x=>(x.data.note||"")+(x.data.source==="pos"?" (POS)":"")},
+        {k:"units",l:"Units",r:1,v:x=>(x.data.adjustments||[]).reduce((a,l)=>a+int(l.delta),0)},
+        {k:"value",l:"Value",r:1,v:x=>(x.data.adjustments||[]).reduce((a,l)=>a+int(l.delta)*num(l.cost),0),f:x=>money((x.data.adjustments||[]).reduce((a,l)=>a+int(l.delta)*num(l.cost),0))},
+        {k:"qb",l:"QuickBooks",nosort:1,f:adjQb}]});
+  };
+  const form = () => ({reason:$("#adjf",main).reason.value, note:$("#adjf",main).note.value});
+  let saved_form=null; const keep=()=>{ if($("#adjf",main)) saved_form=form(); };
+  const restore=()=>{ if(saved_form&&$("#adjf",main)){ $("#adjf",main).reason.value=saved_form.reason; $("#adjf",main).note.value=saved_form.note; } };
+  const rerender=()=>{ render(); restore(); };
+  main.addEventListener("change", e=>{ if(e.target.dataset.k==="delta"){ lines[int(e.target.closest("tr").dataset.i)].delta=int(e.target.value); keep(); rerender(); } });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-a]"); if(!b) return;
+    if(b.dataset.a==="del"){ lines.splice(int(b.closest("tr").dataset.i),1); keep(); rerender(); return; }
+    if(b.dataset.a==="finish"){ setBusy(b,true,"Saving…"); try{ await saveMeta(T_CNT, unsaved, ["status","data"]); localStorage.removeItem("adj_unsaved"); flashNext("Saved.","good"); route(); }catch(err){ flash(main,"Still couldn't save: "+err.message,"bad"); setBusy(b,false); } return; }
+    if(b.dataset.a!=="apply") return;
+    main.querySelectorAll('input[data-k="delta"]').forEach(inp=>lines[int(inp.closest("tr").dataset.i)].delta=int(inp.value));
+    const f=form(); setBusy(b,true,"Applying…");
+    try{ const s=await applyAdjustment({...f, lines}); flashNext(`${s.name} applied: Shopify stock is updated.`,"good"); location.hash="#adjust/"+legacy(s.id); }
+    catch(err){ flash(main,err.message,"bad"); setBusy(b,false); } });
   render();
 };
 
@@ -1187,11 +1298,12 @@ const SET_BARCODE = `mutation PanelBarcode($productId: ID!, $variants: [ProductV
 pages.labels = async (main, arg) => {
   await loadCatalog();
   const list = JSON.parse(sessionStorage.getItem("labels")||"[]");
+  const back = sessionStorage.getItem("labels_back"); sessionStorage.removeItem("labels_back");
   if(arg && arg.includes("~")){ const [poId,rid]=arg.split("~"); const po=(await loadPOs(true)).find(p=>legacy(p.id)===poId); const rc=po&&(po.data.receipts||[]).find(r=>r.id===rid);
     if(rc){ list.length=0; rc.lines.forEach(l=>list.push({id:l.variant_id, qty:int(l.qty)})); } history.replaceState(null,"","#labels"); }
   const save=()=>sessionStorage.setItem("labels",JSON.stringify(list));
   const render=()=>{ const items=list.map(x=>({...x, v:PURCH.cat.byId[x.id]})).filter(x=>x.v); const missing=items.filter(x=>!x.v.barcode&&!x.v.sku);
-    main.innerHTML=`<div class="toprow"><div><h1>Barcode labels</h1><p class="sub">Print price labels with barcodes your POS can scan. Products without a barcode get one, saved to Shopify before printing.</p></div></div>
+    main.innerHTML=`${back?`<a class="back" href="${esc(back)}">Back</a>`:""}<div class="toprow"><div><h1>Barcode labels</h1><p class="sub">Print price labels with barcodes your POS can scan. Products without a barcode get one, saved to Shopify before printing.</p></div></div>
       <div class="tools"><div id="pick" style="flex:1;max-width:520px"></div>
       <label>Label size <select id="fmt"><option value="roll">Roll label 2.25 × 1.25 in (Dymo/Zebra)</option><option value="sheet">Avery 5160 sheet, 30 per page</option></select></label>
       <label class="check"><input type="checkbox" id="price" checked> Show price</label></div>
@@ -1239,13 +1351,16 @@ pages.value = async (main) => {
     if(k==="neg") return makeTable(h,{rows:st.filter(v=>v.onHand<0).map(v=>({...v,__id:v.id})),columns:prodCols,csvName:"below_zero",emptyText:"Nothing is below zero."});
     if(k==="slow") return makeTable(h,{rows:inStock.filter(v=>!sold(v)).map(v=>({...v,__id:v.id})),columns:prodCols,csvName:"not_selling",sort:["value",-1],emptyText:"Everything in stock sold in the last 60 days."});
     makeTable(h,{rows:recent.map((r,i)=>({...r,__id:i})),csvName:"cost_history",sort:["at",-1],emptyText:"No deliveries received through the panel yet.",
-      columns:[{k:"at",l:"Received",nw:1,v:x=>shortDate(String(x.at).slice(0,10)),sv:x=>x.at},{k:"po",l:"PO"},{k:"supplier",l:"Supplier"},{k:"title",l:"Product",w:1},{k:"qty",l:"Qty",r:1},{k:"cost",l:"Paid each",r:1,f:x=>money(x.cost)},{k:"now",l:"Cost now",r:1,f:x=>x.now===null?"":money(x.now)}]}); };
+      columns:[{k:"at",l:"Received",nw:1,v:x=>shortDate(localDay(x.at)),sv:x=>x.at},{k:"po",l:"PO"},{k:"supplier",l:"Supplier"},{k:"title",l:"Product",w:1},{k:"qty",l:"Qty",r:1},{k:"cost",l:"Paid each",r:1,f:x=>money(x.cost)},{k:"now",l:"Cost now",r:1,f:x=>x.now===null?"":money(x.now)}]}); };
   main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) show(b.dataset.t); });
   show("type");
 };
 
 /* purchasing pages exist only in Shopify admin, and only while the switch is on */
-const PURCH_PAGES=["suppliers","pos","po","receive","reorder","counts","count","labels","value"];
+const PURCH_PAGES=["suppliers","pos","po","receive","reorder","counts","count","value"];
+["labels","adjust"].forEach(k=>{ const fn=pages[k]; pages[k]=async(main,arg)=>{ const ok = k==="labels" ? (purchOn()||adjOn()) : adjOn();
+  if(!ok){ main.innerHTML=`<h1>${k==="adjust"?"Stock adjustments are switched off":"Labels are switched off"}</h1><p class="sub">${ADMIN?"Turn them on in config.ini on the QuickBooks PC: [adjustments] enabled = yes (or [purchasing] enabled = yes), then run a sync.":"This works in the Shopify admin panel only."}</p>`; return; }
+  return fn(main,arg); }; });
 PURCH_PAGES.forEach(k=>{ const fn=pages[k]; pages[k]=async(main,arg)=>{ if(!purchOn()){ main.innerHTML=`<h1>Purchasing is switched off</h1><p class="sub">${ADMIN?"Purchase orders, receiving, reorder suggestions, stock counts, labels and stock value are turned on in config.ini on the QuickBooks PC: in the [purchasing] section set enabled = yes, then run a sync. Keep it off while GoStock is still entering purchases in QuickBooks, or purchases will be entered twice.":"Purchasing works in the Shopify admin panel only."}</p>`; return; } return fn(main,arg); }; });
 let FLASH_NEXT=null;
 /* compare mode's demo: the sales pages show what WOULD be posted - say so on every page */
@@ -1502,6 +1617,8 @@ async function refreshChrome(){
     const o = await api("/api/overview");
     SETTINGS = o.settings||{};
     document.querySelectorAll("nav a.purch").forEach(a=>a.hidden=!purchOn());
+    document.querySelectorAll("nav a.adjon").forEach(a=>a.hidden=!adjOn());
+    document.querySelectorAll("nav a.stockon").forEach(a=>a.hidden=!(purchOn()||adjOn()));
     const set=(id,n)=>{ const el=$(id); el.hidden=!n; el.textContent=n||""; };
     set("#n-prob", o.problem_count); set("#n-rec", o.recon_problems); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
     if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
