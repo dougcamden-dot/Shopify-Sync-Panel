@@ -139,6 +139,30 @@ body.embedded main{padding:22px 26px 50px}
   .fig{flex-basis:45%;border-bottom:1px solid var(--rule)}
 }
 @media (prefers-reduced-motion:no-preference){ .tag .bar i{transition:width .6s ease} }
+/* status window: what the sync is doing, in plain English */
+#syncwin{position:fixed;right:18px;bottom:18px;width:400px;max-width:calc(100vw - 36px);max-height:72vh;display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--rule);border-radius:10px;box-shadow:0 10px 30px rgba(30,43,51,.18);z-index:50;font-size:14px}
+#syncwin[hidden]{display:none}
+#syncwin header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--rule-soft)}
+#syncwin header .t{flex:1;min-width:0} #syncwin header .t b{display:block;font-size:15px} #syncwin header .t span{color:var(--steel);font-size:12.5px}
+#syncwin header button{background:none;border:0;cursor:pointer;color:var(--steel);font-size:18px;line-height:1;padding:4px}
+#syncwin .all{height:4px;background:var(--rule-soft)} #syncwin .all i{display:block;height:100%;background:var(--good)}
+#syncwin ol{list-style:none;margin:0;padding:6px 14px 10px;overflow:auto}
+#syncwin li{display:grid;grid-template-columns:22px 1fr;gap:2px 8px;padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+#syncwin li:last-child{border-bottom:0}
+#syncwin .ic{font-weight:700;text-align:center;line-height:20px}
+#syncwin li.done .ic{color:var(--good)} #syncwin li.error .ic{color:var(--bad)} #syncwin li.waiting,#syncwin li.skipped{color:var(--steel)}
+#syncwin li.running{font-weight:600} #syncwin li.running .ic{color:var(--brass)}
+#syncwin .d{grid-column:2;font-weight:400;color:var(--steel);font-size:12.5px}
+#syncwin li.error .d{color:var(--bad)}
+#syncwin .mini{grid-column:2;height:6px;background:var(--rule-soft);border-radius:3px;overflow:hidden;margin-top:3px}
+#syncwin .mini i{display:block;height:100%;background:var(--brass)}
+#syncwin footer{padding:8px 14px;border-top:1px solid var(--rule-soft);font-size:13px}
+#syncwin.min ol,#syncwin.min footer{display:none}
+@media (prefers-reduced-motion:no-preference){ #syncwin li.running .ic{animation:pulse 1.2s ease-in-out infinite} #syncwin .all i,#syncwin .mini i{transition:width .5s ease} }
+@keyframes pulse{50%{opacity:.35}}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media print{ #syncwin{display:none} }
 
 tr.detail td td,tr.detail td th{padding:4px 10px}
 /* sync now */
@@ -1402,21 +1426,26 @@ async function adminQueue(){
     orders.push(...d.nodes); after=d.pageInfo.hasNextPage?d.pageInfo.endCursor:null; } while(after && orders.length<1000);
   const sales={}; if(!s.demo) (await adminSales()).forEach(r=>sales[r.order_id]={kind:r.kind,total:r.total,paid:r.paid,refunded:r.refunded});   // demo sales aren't posted
   const items=queueItems(orders, sales, s.unpaid_orders);
-  const {req, state} = await adminRequest(true);
+  const {req, state, progress} = await adminRequest(true);
   // A sync the PC has started but not yet reported back on. Both times are the PC's clock.
   const running = state && state.started_at > (st.published||0) ? state : null;
+  // The status window: shown while the PC reports a sync in progress, and for 30 minutes after it ends.
+  // A stale "in progress" (the PC stopped reporting for 10 minutes) isn't shown.
+  const pAge = progress ? Date.now()/1000 - (progress.finished ? progress.finished_at : progress.sent_at||0) : 1e9;
+  const prog = progress && ((progress.finished && pAge < 1800) || (!progress.finished && pAge < 600)) ? progress : null;
   return {queue:{count:items.length, items}, mode:s.mode, schedule_minutes:s.schedule_minutes,
           // Done once the PC has handled this click (its id comes back in the published status) or has
           // published anything since; either one ends the wait, so a clock difference can't leave it stuck.
           pending: !running && req && String(req.id)!==String(s.sync_request_handled||"") && req.at > (st.published||0) ? req : null,
-          running: !!running, remote: running, listener_ok:true};
+          running: !!running || !!(prog && !prog.finished), remote: running || (prog && !prog.finished ? {started_at:prog.started_at, mode:prog.mode} : null),
+          listener_ok:true, progress: prog};
 }
 async function adminRequest(withState){
   const d=(await gqlv(`{ currentAppInstallation { id sr: metafield(namespace: "qbsync", key: "sync_request") { value }
-    ss: metafield(namespace: "qbsync", key: "sync_state") { value } } }`)).currentAppInstallation;
+    ss: metafield(namespace: "qbsync", key: "sync_state") { value } sp: metafield(namespace: "qbsync", key: "sync_progress") { value } } }`)).currentAppInstallation;
   SYNC.installId=d.id;
   const p=v=>{ try{ return v?JSON.parse(v.value):null; }catch(e){ return null; } };
-  return withState ? {req:p(d.sr), state:p(d.ss)} : p(d.sr);
+  return withState ? {req:p(d.sr), state:p(d.ss), progress:p(d.sp)} : p(d.sr);
 }
 async function requestSync(){
   if(!ADMIN){ const r=await fetch("/api/sync-now",{method:"POST",headers:{"X-QBSync":"1"}}); if(!r.ok) throw new Error("the sync program refused ("+r.status+")"); return; }
@@ -1450,14 +1479,52 @@ async function drawSyncBox(){
   if(q.error||(q.queue&&q.queue.error)) html+=`<div class="state warn">${esc(q.error||q.queue.error)}</div>`;
   if(!ADMIN && q.listener_ok===false) html+=`<div class="state warn">The Web Connector's "Shopify Sync - On Demand" entry isn't checking in, so this button can't start a sync. Tick its Auto-Run box (SETUP-GUIDE.txt, "Sync now").</div>`;
   box.innerHTML=html;
+  drawSyncWin(q.progress);
   const busy=!!(q.pending||q.running);
   if(SYNC.wasBusy && !busy){ SYNC.busyUntil=0; refreshChrome(); route(); }   // a sync just finished: show the new data
   SYNC.wasBusy=busy;
-  SYNC.timer=setTimeout(drawSyncBox, (busy||Date.now()<SYNC.busyUntil)?5000:20000);
+  const live = q.progress && !q.progress.finished;
+  SYNC.timer=setTimeout(drawSyncBox, live ? (ADMIN?4000:1500) : (busy||Date.now()<SYNC.busyUntil)?5000:20000);
 }
 document.addEventListener("click", async e=>{ const b=e.target.closest("[data-sync]"); if(!b) return;
   b.disabled=true; try{ await requestSync(); SYNC.busyUntil=Date.now()+90000; }
   catch(err){ alertBox("Couldn't ask for a sync: "+err.message); } drawSyncBox(); });
+/* ---------- status window ---------- */
+const MODE_NAME={live:"Live sync",preview:"Preview (nothing posted)",compare:"Check (read-only)"};
+function drawSyncWin(p){
+  const w=$("#syncwin"); if(!w) return;
+  if(!p || !p.steps || !p.steps.length){ w.hidden=true; return; }
+  const key=String(p.finished_at||p.started_at||"");
+  if(p.finished && sessionStorage.getItem("syncwin_closed")===key){ w.hidden=true; return; }
+  const steps=p.steps, done=steps.filter(s=>["done","skipped","error"].includes(s.state)).length;
+  const pct = p.finished ? 100 : Math.max(2, Math.round(done/steps.length*100));
+  const icon={done:"✓",running:"●",waiting:"○",skipped:"–",error:"!"};
+  const errs=p.errors||steps.reduce((a,s)=>a+(s.errors||0),0);
+  const title = p.finished
+    ? (p.status==="failed" ? "Sync stopped" : errs ? `Sync finished with ${errs} problem${errs===1?"":"s"}` : "Sync finished")
+    : "Syncing now";
+  const sub = p.finished ? `${MODE_NAME[p.mode]||""} · ${when(p.finished_at)}` : `${MODE_NAME[p.mode]||""} · started ${when(p.started_at)}`;
+  // A sync that finished before this page was opened starts folded up (title only); one you watched stays open.
+  if(!p.finished) SYNC.sawRunning=true;
+  if(p.finished && !SYNC.sawRunning && SYNC.winKey!==key) w.classList.add("min");
+  SYNC.winKey=key;
+  const was=w.classList.contains("min");
+  w.innerHTML=`<header><div class="t"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
+      <button type="button" data-w="min" aria-label="${was?"Show the steps":"Hide the steps"}" title="${was?"Show":"Hide"}">${was?"▴":"▾"}</button>
+      ${p.finished?`<button type="button" data-w="close" aria-label="Close">×</button>`:""}</header>
+    <div class="all" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+    <ol>${steps.map(s=>{ const tot=s.total, n=Math.min(s.done||0, tot||0);
+      const count = s.state==="running" && tot ? ` — ${n} of ${tot}` : "";
+      return `<li class="${esc(s.state)}"><span class="ic" aria-hidden="true">${icon[s.state]||"○"}</span>
+        <span>${esc(s.label)}${esc(count)}<span class="sr-only"> (${esc({done:"done",running:"in progress",waiting:"waiting",skipped:"skipped",error:"problem"}[s.state]||s.state)})</span></span>
+        ${s.state==="running"&&tot?`<span class="mini"><i style="width:${Math.round(n/tot*100)}%"></i></span>`:""}
+        ${s.detail||s.errors?`<span class="d">${esc(s.detail||"")}${s.errors?`${s.detail?" · ":""}${s.errors} problem${s.errors===1?"":"s"}`:""}</span>`:""}</li>`; }).join("")}</ol>
+    ${p.finished?`<footer>${errs?`<a href="#problems">See what went wrong</a> · `:""}<a href="#runs">Sync history</a>${p.mode==="compare"?` · <a href="#reconcile">Reconcile</a>`:""}</footer>`:""}`;
+  w.hidden=false;
+  w.onclick=e=>{ const b=e.target.closest("[data-w]"); if(!b) return;
+    if(b.dataset.w==="min"){ w.classList.toggle("min"); drawSyncWin(p); }
+    if(b.dataset.w==="close"){ sessionStorage.setItem("syncwin_closed", key); w.hidden=true; } };
+}
 function alertBox(msg){ const m=$("#main"); if(m) flash(m,msg,"bad"); }
 
 /* ---------- Tools (PC dashboard only): what the numbered .bat files used to do ---------- */
@@ -1630,5 +1697,6 @@ document.body.classList.toggle("embedded", ADMIN);
 window.addEventListener("hashchange", ()=>{ route(); $("#main").focus({preventScroll:true}); });
 if(OUTSIDE_ADMIN) route(); else { refreshChrome().then(route); drawSyncBox(); }
 </script>
+<section id="syncwin" hidden aria-label="Sync status"></section>
 </body>
 </html>
