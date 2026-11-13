@@ -1565,6 +1565,7 @@ async function adminTools(main){
         <tr><td>Last checked in</td><td>${seen?esc(ago(seen))+" ("+esc(when(seen))+")":"never seen"}${stale?' <span class="pill warn">not checking in</span>':' <span class="pill good">online</span>'}</td></tr>
         <tr><td>Sync program</td><td>${pc.version?"version "+esc(pc.version)+", ":""}${pc.started_at?"running since "+esc(when(pc.started_at)):"start time not known yet"}</td></tr>
         <tr><td>Starts with Windows</td><td>${yn(pc.autostart)}</td></tr>
+        <tr><td>QuickBooks Web Connector running</td><td>${yn(pc.web_connector)}</td></tr>
         <tr><td>Desktop shortcut</td><td>${pc.shortcuts==null?"Unknown":pc.shortcuts?"Yes":"No"}</td></tr>
         <tr><td>Mode</td><td>${esc({live:"Live",compare:"Compare / demo",preview:"Preview"}[pc.mode||set.mode]||pc.mode||set.mode||"")}</td></tr>
         <tr><td>Automatic sync</td><td>${(pc.schedule_minutes??set.schedule_minutes)?`every ${esc(pc.schedule_minutes??set.schedule_minutes)} minutes`:"only when asked"}</td></tr>
@@ -1620,6 +1621,8 @@ pages.tools = async (main) => {
       <div class="actions"><button class="btn" data-tool="restart" ${dis}>Restart</button> <button class="btn danger" data-tool="stop" ${dis} data-confirm="Click again to stop the sync program">Stop</button></div>
       <p style="margin-top:12px">Start with Windows: ${t.autostart===null?'<span class="state-off">unknown</span>':t.autostart?'<span class="state-on">On</span> - starts by itself (hidden) when you log in':'<span class="state-off">Off</span> - start it with Shopify Sync.bat'}</p>
       <div class="actions">${t.autostart?`<button class="btn" data-tool="autostart-off" ${dis}>Turn off</button>`:`<button class="btn" data-tool="autostart-on" ${dis}>Turn on</button>`}</div>
+      <p style="margin-top:12px">QuickBooks Web Connector (it starts each sync): ${t.web_connector.running===null?'<span class="state-off">unknown</span>':t.web_connector.running?'<span class="state-on">Running</span>':'<span class="state-off">Not running</span> - nothing syncs until it is'}${t.web_connector.keep?" · the program starts it, and starts it again if it's closed":" · not watched ([tools] start_web_connector = no)"}${t.web_connector.path?"":' · <span class="state-off">not found</span> - set [tools] web_connector_path in config.ini'}</p>
+      <div class="actions"><button class="btn${t.web_connector.running===false?" primary":""}" data-tool="web-connector" ${dis}>Start the Web Connector</button></div>
       <p style="margin-top:12px">Shortcut: ${(t.shortcuts||[]).length?'<span class="state-on">On the desktop and in the Start menu</span> - click <strong>Shopify Sync</strong> to start the program and open this dashboard':'<span class="state-off">None yet</span> - a <strong>Shopify Sync</strong> icon for the desktop and Start menu, instead of the .bat file'}</p>
       <div class="actions">${(t.shortcuts||[]).length?`<button class="btn" data-tool="shortcuts" ${dis}>Recreate</button> <button class="btn" data-tool="shortcuts-remove" ${dis}>Remove</button>`:`<button class="btn primary" data-tool="shortcuts" ${dis}>Create shortcuts</button>`}</div>
       <pre class="toolout" hidden></pre></section>
@@ -1679,6 +1682,20 @@ async function route(){
   refreshChrome();
   if(page==="overview"||!pages[page]) timer=setTimeout(route, ADMIN ? 120000 : 30000);
 }
+/* "No sync since ..." - shown on every page when the last sync is older than [sync] warn_after_hours */
+function staleBanner(last, hours){
+  const old=$("#stale"); if(old) old.remove();
+  hours = hours===undefined||hours===null ? 6 : +hours;
+  if(!hours || !last) return;
+  const t = typeof last==="number" ? last : Date.parse(String(last).replace(" ","T"))/1000;
+  if(!t || Date.now()/1000 - t < hours*3600) return;
+  const days = Math.floor((Date.now()/1000 - t)/86400);
+  const el=document.createElement("div"); el.id="stale"; el.className="banner bad"; el.setAttribute("role","alert");
+  el.innerHTML = `<strong>No sync since ${esc(when(t))}${days>=1?` (${days} day${days===1?"":"s"} ago)`:""}.</strong> `
+    + (ADMIN ? "Check that the QuickBooks PC is switched on and logged in, and that the QuickBooks Web Connector is running (its icon by the clock). The Tools page shows what the PC last reported."
+             : `The QuickBooks Web Connector starts each sync - check that it's running (its icon by the clock). <a href="#tools">Tools</a> can start it.`);
+  const main=$("#main"); main.insertBefore(el, main.firstChild);
+}
 async function refreshChrome(){
   try{
     const o = await api("/api/overview");
@@ -1688,6 +1705,7 @@ async function refreshChrome(){
     document.querySelectorAll("nav a.stockon").forEach(a=>a.hidden=!(purchOn()||adjOn()));
     const set=(id,n)=>{ const el=$(id); el.hidden=!n; el.textContent=n||""; };
     set("#n-prob", o.problem_count); set("#n-rec", o.recon_problems); set("#n-inv", o.kpis ? o.kpis.open_invoices : 0);
+    staleBanner(ADMIN ? o.published : (o.settings||{}).last_sync, (o.settings||{}).warn_after_hours);
     if(ADMIN){ $("#foot").textContent = o.published ? `Updated ${ago(o.published)} from the QuickBooks PC` : ""; return; }
     const panel = o.settings && o.settings.panel_url ? `<br>Shopify admin panel: ${o.settings.panel_error?'<span style="color:var(--bad)">not updating</span>':o.settings.panel_published?"updated "+esc(ago(o.settings.panel_published)):"waiting for first sync"}` : "";
     $("#foot").innerHTML = o.settings && !o.settings.error ? `${{live:"Live",compare:"Compare (read-only)"}[o.settings.mode]||"Preview"} mode<br>Syncing orders since ${esc(niceDate(o.settings.start_date))}<br>Stock to Shopify: ${o.settings.push_inventory?"on":"off"}${panel}<br><a href="${esc(o.settings.admin_url)}" target="_blank" rel="noopener">Open Shopify admin</a>` : "Settings need attention";
