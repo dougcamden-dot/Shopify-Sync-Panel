@@ -1426,7 +1426,7 @@ async function adminQueue(){
     orders.push(...d.nodes); after=d.pageInfo.hasNextPage?d.pageInfo.endCursor:null; } while(after && orders.length<1000);
   const sales={}; if(!s.demo) (await adminSales()).forEach(r=>sales[r.order_id]={kind:r.kind,total:r.total,paid:r.paid,refunded:r.refunded});   // demo sales aren't posted
   const items=queueItems(orders, sales, s.unpaid_orders);
-  const {req, state, progress} = await adminRequest(true);
+  const {req, state, progress, pause} = await adminRequest(true);
   // A sync the PC has started but not yet reported back on. Both times are the PC's clock.
   const running = state && state.started_at > (st.published||0) ? state : null;
   // The status window: shown while the PC reports a sync in progress, and for 30 minutes after it ends.
@@ -1438,14 +1438,15 @@ async function adminQueue(){
           // published anything since; either one ends the wait, so a clock difference can't leave it stuck.
           pending: !running && req && String(req.id)!==String(s.sync_request_handled||"") && req.at > (st.published||0) ? req : null,
           running: !!running || !!(prog && !prog.finished), remote: running || (prog && !prog.finished ? {started_at:prog.started_at, mode:prog.mode} : null),
-          listener_ok:true, progress: prog};
+          listener_ok:true, progress: prog, paused_until: pause && pause.until ? pause.until : 0};
 }
 async function adminRequest(withState){
   const d=(await gqlv(`{ currentAppInstallation { id sr: metafield(namespace: "qbsync", key: "sync_request") { value }
-    ss: metafield(namespace: "qbsync", key: "sync_state") { value } sp: metafield(namespace: "qbsync", key: "sync_progress") { value } } }`)).currentAppInstallation;
+    ss: metafield(namespace: "qbsync", key: "sync_state") { value } sp: metafield(namespace: "qbsync", key: "sync_progress") { value }
+    pz: metafield(namespace: "qbsync", key: "sync_pause") { value } } }`)).currentAppInstallation;
   SYNC.installId=d.id;
   const p=v=>{ try{ return v?JSON.parse(v.value):null; }catch(e){ return null; } };
-  return withState ? {req:p(d.sr), state:p(d.ss), progress:p(d.sp)} : p(d.sr);
+  return withState ? {req:p(d.sr), state:p(d.ss), progress:p(d.sp), pause:p(d.pz)} : p(d.sr);
 }
 async function requestSync(){
   if(!ADMIN){ const r=await fetch("/api/sync-now",{method:"POST",headers:{"X-QBSync":"1"}}); if(!r.ok) throw new Error("the sync program refused ("+r.status+")"); return; }
@@ -1469,6 +1470,7 @@ async function drawSyncBox(){
       ? `Started ${esc(when(q.remote.started_at))} on the QuickBooks PC and still not finished. Check the PC (Sync history and the logs there).`
       : `On the QuickBooks PC, started ${esc(when(q.remote.started_at))}${mins?` (${mins} min)`:""}. ${q.remote.mode==="compare"?"A compare run re-checks QuickBooks and can take a few minutes. ":""}This page updates when it's done.`}</div>`; }
   else if(q.running) html=`<button class="btn" disabled>Syncing…</button><div class="state">QuickBooks is being updated.</div>`;
+  else if(q.paused_until && q.paused_until*1000>Date.now()) html=`<div class="state warn" style="margin:0"><strong>Syncing paused</strong> until ${esc(new Date(q.paused_until*1000).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}))}${n?` · ${n} waiting`:""}. <a href="#tools">Resume on the Tools page</a></div>`;
   else if(q.pending || Date.now()<SYNC.busyUntil){ const age = q.pending ? Date.now()/1000-q.pending.at : 0;
     html = age>180 ? `<button class="btn" disabled>Requested</button><div class="state warn">Still waiting after ${Math.round(age/60)} minutes. ${ADMIN
         ? "Is the QuickBooks PC on, with QuickBooks, the Web Connector and the sync program running?"
@@ -1564,6 +1566,7 @@ async function adminTools(main){
       <table class="lines" style="max-width:640px"><tbody>
         <tr><td>Last checked in</td><td>${seen?esc(ago(seen))+" ("+esc(when(seen))+")":"never seen"}${stale?' <span class="pill warn">not checking in</span>':' <span class="pill good">online</span>'}</td></tr>
         <tr><td>Sync program</td><td>${pc.version?"version "+esc(pc.version)+", ":""}${pc.started_at?"running since "+esc(when(pc.started_at)):"start time not known yet"}</td></tr>
+        <tr><td>Syncing</td><td>${pc.paused_until && pc.paused_until*1000>Date.now() ? `<strong>Paused</strong> until ${esc(new Date(pc.paused_until*1000).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}))}` : "On"}</td></tr>
         <tr><td>Starts with Windows</td><td>${yn(pc.autostart)}</td></tr>
         <tr><td>QuickBooks Web Connector running</td><td>${yn(pc.web_connector)}</td></tr>
         <tr><td>Desktop shortcut</td><td>${pc.shortcuts==null?"Unknown":pc.shortcuts?"Yes":"No"}</td></tr>
@@ -1573,6 +1576,7 @@ async function adminTools(main){
       </tbody></table>
       ${stale?`<p class="banner" style="margin-top:12px">The PC hasn't checked in for a while, so the buttons below will wait until it does. Check that the QuickBooks PC is on, and that the On Demand entry in the Web Connector has Auto-Run ticked.</p>`:""}
       <div class="actions" style="margin-top:10px"><button class="btn" data-ask="status">Refresh status</button> <button class="btn primary" data-ask="check">Check settings</button>
+        ${pc.paused_until && pc.paused_until*1000>Date.now() ? `<button class="btn primary" data-ask="resume">Resume syncing</button> <button class="btn" data-ask="pause">Pause 1 more hour</button>` : `<button class="btn" data-ask="pause">Pause syncing for 1 hour</button>`}
         ${set.remote_restart===false?"":`<button class="btn" data-ask="restart" data-confirm="Click again to restart the sync program">Restart sync program</button>`}</div>
       ${set.remote_restart===false?`<p class="muted">Restarting from here is turned off in config.ini on the PC.</p>`:""}
       <pre class="toolout" hidden></pre></section>`;
@@ -1618,7 +1622,11 @@ pages.tools = async (main) => {
     ${winNote}
     <section class="tsec"><h2>The sync program</h2>
       <p>Version ${esc(t.version)}, running since ${esc(when(t.started_at))}. Restart it after unzipping an update, so the new version is used.</p>
-      <div class="actions"><button class="btn" data-tool="restart" ${dis}>Restart</button> <button class="btn danger" data-tool="stop" ${dis} data-confirm="Click again to stop the sync program">Stop</button></div>
+      <p>Syncing: ${t.paused_until?`<span class="state-off">Paused until ${esc(new Date(t.paused_until*1000).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}))}</span> - nothing is read from or written to QuickBooks`:'<span class="state-on">On</span>'}</p>
+      <div class="actions"><button class="btn${t.paused_until?"":" danger"}" data-tool="pause">${t.paused_until?"Pause 1 more hour":"Pause syncing for 1 hour"}</button>
+        ${t.paused_until?`<button class="btn primary" data-tool="resume">Resume syncing</button>`:""}</div>
+      <p class="muted" style="margin:8px 0 0">Pause stops the sync from touching QuickBooks (handy while another program works on it) and keeps this dashboard and the Shopify panel working. Stop closes the program altogether - start it again with the <strong>Shopify Sync</strong> shortcut.</p>
+      <div class="actions" style="margin-top:10px"><button class="btn" data-tool="restart" ${dis}>Restart</button> <button class="btn danger" data-tool="stop" ${dis} data-confirm="Click again to stop the sync program">Stop</button></div>
       <p style="margin-top:12px">Start with Windows: ${t.autostart===null?'<span class="state-off">unknown</span>':t.autostart?'<span class="state-on">On</span> - starts by itself (hidden) when you log in':'<span class="state-off">Off</span> - start it with Shopify Sync.bat'}</p>
       <div class="actions">${t.autostart?`<button class="btn" data-tool="autostart-off" ${dis}>Turn off</button>`:`<button class="btn" data-tool="autostart-on" ${dis}>Turn on</button>`}</div>
       <p style="margin-top:12px">QuickBooks Web Connector (it starts each sync): ${t.web_connector.running===null?'<span class="state-off">unknown</span>':t.web_connector.running?'<span class="state-on">Running</span>':'<span class="state-off">Not running</span> - nothing syncs until it is'}${t.web_connector.keep?" · the program starts it, and starts it again if it's closed":" · not watched ([tools] start_web_connector = no)"}${t.web_connector.path?"":' · <span class="state-off">not found</span> - set [tools] web_connector_path in config.ini'}</p>
@@ -1663,7 +1671,8 @@ pages.tools = async (main) => {
         try{ const n=await (await fetch("/api/tools",{cache:"no-store"})).json(); if(n.started_at!==was){ out.textContent+="Restarted."; setTimeout(()=>location.reload(),600); return; } }catch(err){ out.textContent+="."; } }
       out.textContent+="\nIt hasn't come back. Start it with Shopify Sync.bat; the reason is in the logs."; return; }
     if(r.ok && a==="stop"){ main.querySelectorAll("button").forEach(x=>x.disabled=true); return; }
-    if(r.ok && ["autostart-on","autostart-off","qwc","build-panel","shortcuts","shortcuts-remove"].includes(a)){
+    if(r.ok && ["pause","resume"].includes(a)) drawSyncBox();
+    if(r.ok && ["autostart-on","autostart-off","qwc","build-panel","shortcuts","shortcuts-remove","pause","resume","web-connector"].includes(a)){
       TOOL_LAST={i:[...main.querySelectorAll(".tsec")].indexOf(b.closest(".tsec")), text:out.textContent, ok:r.ok}; route(); }
   });
 };
