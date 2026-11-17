@@ -114,6 +114,7 @@ td.nw{white-space:nowrap}
 td.wide{min-width:230px}
 td .pill{white-space:normal}
 tr.click{cursor:pointer}
+.markbar{margin-top:10px;padding-top:10px;border-top:1px solid var(--line,#E5E3DC);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 tr.click:hover td{background:#FAFAF8}
 tr.open td{background:var(--brass-pale)}
 tr.detail td{background:#FCFBF7;padding:10px 18px 16px}
@@ -388,7 +389,7 @@ function makeTable(host, {columns, rows, search=true, chips=null, detail=null, c
   const tbody=$(".tablewrap > table > tbody",host), head=$(".tablewrap > table > thead",host), countLine=$(".count-line",host);
   const filtered = () => {
     let r = rows;
-    if(chips && st.chip){ const f = chips.find(c=>c[0]===st.chip)[2]; if(f) r = r.filter(f); }
+    if(chips && st.chip){ const f = (chips.find(c=>c[0]===st.chip)||[])[2]; if(f) r = r.filter(f); }
     if(st.q){ const q=st.q.toLowerCase(); r = r.filter(x => columns.some(c => String(c.v ? c.v(x) : x[c.k] ?? "").toLowerCase().includes(q))); }
     if(st.sortKey){ const c = columns.find(c=>c.k===st.sortKey); const val = x => c.sv ? c.sv(x) : (c.v ? c.v(x) : x[c.k]);
       r = [...r].sort((a,b)=>{ const A=val(a), B=val(b); const na=typeof A==="number"||(A!==""&&A!==null&&!isNaN(A)&&typeof A!=="boolean"&&c.r);
@@ -744,31 +745,83 @@ function outsideAdminNotice(main){
 }
 
 /* ---------- Reconcile: is every Shopify order in QuickBooks, correctly? ---------- */
-const RSTAT = {problem:["bad","Problem"], check:["warn","Check"], ok:["good","Match"], info:["","Not posted"]};
+const RSTAT = {problem:["bad","Problem"], check:["warn","Check"], ok:["good","Match"], info:["","Not posted"], marked:["good","Marked OK"], dismissed:["","Dismissed"]};
+/* ---- Mark as OK / Dismiss. Rows carry mark_key and mark_fp (the numbers the mark is made on). ---- */
+async function adminMarks(){
+  const d=(await gqlv(`{ currentAppInstallation { id rm: metafield(namespace: "qbsync", key: "recon_marks") { value } } }`)).currentAppInstallation;
+  let m={}; try{ m=JSON.parse((d.rm||{}).value||"{}")||{}; }catch(e){}
+  return {id:d.id, marks:m};
+}
+/* Marks made in the panel since the PC last published: apply them on top (newest wins). */
+function applyPanelMarks(r, marks){
+  for(const rows of [r.orders||[], r.qb_only||[]]) for(const x of rows){
+    const m=marks[x.mark_key]; if(!m || (x.mark_at && +x.mark_at>=+m.at)) continue;
+    if(x.status==="marked"||x.status==="dismissed"){ x.status=x.status_was||x.status; delete x.mark; }
+    delete x.mark_changed;
+    if(m.kind==="ok"||m.kind==="dismiss"){
+      x.mark_note=m.note||""; x.mark_at=m.at; x.mark_by=m.by||"panel";
+      if(m.fp && m.fp!==x.mark_fp){ x.mark_changed=m.kind; continue; }
+      x.status_was=x.status; x.mark=m.kind; x.status = m.kind==="ok"?"marked":"dismissed";
+    } else { x.mark_note=""; x.mark_at=m.at; }
+  }
+  const c=r.counts, o=r.orders||[], q=r.qb_only||[];
+  ["ok","problem","check","info"].forEach(k=>c[k]=o.filter(x=>x.status===k).length);
+  c.qb_only_problem=q.filter(x=>x.status==="problem").length;
+  c.marked=[...o,...q].filter(x=>x.status==="marked").length; c.dismissed=[...o,...q].filter(x=>x.status==="dismissed").length;
+  c.missing=o.filter(x=>x.missing&&["problem","check"].includes(x.status)).length+q.filter(x=>x.missing&&x.status==="problem").length;
+  return r;
+}
+async function saveMark(x, kind, note){
+  if(!ADMIN){ const r=await fetch("/api/reconcile/mark",{method:"POST",headers:{"X-QBSync":"1","Content-Type":"application/json"},
+      body:JSON.stringify({key:x.mark_key, kind, note:note||"", fp:x.mark_fp})});
+    if(!r.ok) throw new Error("the sync program refused ("+r.status+")"); return; }
+  const {id, marks}=await adminMarks();
+  marks[x.mark_key] = kind==="none" ? {kind:"none", at:Date.now()/1000, by:"panel"} : {kind, note:note||"", fp:x.mark_fp, at:Date.now()/1000, by:"panel"};
+  userErrs((await gqlv(`mutation M($m:[MetafieldsSetInput!]!){ metafieldsSet(metafields:$m){ metafields{ id } userErrors{ field message } } }`,
+    {m:[{ownerId:id, namespace:"qbsync", key:"recon_marks", type:"json", value:JSON.stringify(marks)}]})).metafieldsSet);
+}
+function markBar(x){
+  const when = x.mark_at ? new Date(x.mark_at*1000).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+  if(x.status==="marked"||x.status==="dismissed")
+    return `<div class="markbar"><span class="pill ${x.status==="marked"?"good":""}">${x.status==="marked"?"Marked OK":"Dismissed"}</span> ${esc(when)}${x.mark_note?` - “${esc(x.mark_note)}”`:""}
+      <span class="muted">· It comes back if its numbers change in Shopify or QuickBooks.</span> <button class="btn" data-mark="none">Undo</button></div>`;
+  return `<div class="markbar">${x.mark_changed?`<p class="state warn" style="margin:0 0 8px">${x.mark_changed==="ok"?"Marked OK":"Dismissed"} on ${esc(when)}${x.mark_note?` (“${esc(x.mark_note)}”)`:""}, but the numbers have changed since - so it's back.</p>`:""}
+    <label class="muted" style="display:inline-flex;gap:6px;align-items:center">Note <input data-note maxlength="300" placeholder="e.g. entered by hand, credit memo instead" style="width:280px"></label>
+    <button class="btn primary" data-mark="ok">Mark as OK</button> <button class="btn" data-mark="dismiss">Dismiss</button>
+    <span class="muted">Mark as OK: it's right. Dismiss: hide it without saying it's right. Either way it comes back if its numbers change.</span></div>`;
+}
 const rpill = s => { const [c,l]=RSTAT[s]||["",s]; return `<span class="pill ${c}">${l}</span>`; };
 const signed = v => (v<0?"-":v>0?"+":"")+usd.format(Math.abs(v||0));
-pages.reconcile = async (main) => {
+let RECON_TAB = "orders";
+pages.reconcile = async (main, arg) => {
   const r = await api("/api/reconcile");
+  if(ADMIN && !r.empty){ try{ applyPanelMarks(r, (await adminMarks()).marks); }catch(e){} }
   if(r.empty){ main.innerHTML = `<h1>Reconcile</h1><p class="sub">No check has run yet. This page compares every Shopify order with what's actually in QuickBooks, whoever entered it (LinkToAny, this program, or by hand).</p>
     <p class="sub">To run it while LinkToAny is still posting your sales, set <strong>mode = compare</strong> in config.ini on the QuickBooks PC and run the Web Connector. Compare mode only reads; it changes nothing in QuickBooks or Shopify. In live mode the check also runs once a day by itself.</p>`; return; }
   const c = r.counts, diff = r.qb_total - r.shopify_total;
   main.innerHTML = `<div class="toprow"><div><h1>Reconcile</h1>
       <p class="sub" style="margin:0">Every Shopify order from ${esc(niceDate(r.from))} to ${esc(niceDate(r.to))} checked against QuickBooks. Checked ${esc(ago(r.at))}.</p></div></div>
-    <div class="ledger"><div class="fig lead"><div class="v" style="color:${c.problem+c.qb_only_problem?"var(--bad)":"var(--good)"}">${c.problem+c.qb_only_problem}</div><div class="l">Problems</div></div>
+    <div class="ledger"><div class="fig lead"><div class="v" style="color:${c.missing?"var(--bad)":"var(--good)"}">${n0(c.missing||0)}</div><div class="l">Missing from one side</div></div>
+      <div class="fig"><div class="v" style="color:${c.problem+c.qb_only_problem?"var(--bad)":"var(--good)"}">${c.problem+c.qb_only_problem}</div><div class="l">Problems (all kinds)</div></div>
       <div class="fig"><div class="v">${n0(c.check)}</div><div class="l">To check</div></div>
       <div class="fig"><div class="v">${n0(c.ok)}</div><div class="l">Match</div></div>
       <div class="fig"><div class="v">${n0(c.orders)}</div><div class="l">Shopify orders checked</div></div>
+      ${(c.marked||c.dismissed)?`<div class="fig"><div class="v">${n0((c.marked||0)+(c.dismissed||0))}</div><div class="l">Marked OK / dismissed</div></div>`:""}
       <div class="fig"><div class="v">${signed(diff)}</div><div class="l">QuickBooks vs Shopify sales</div></div></div>
     <ul class="muted" style="margin:12px 0 0;padding-left:18px">${(r.summary||[]).slice(1).map(l=>`<li>${esc(l.trim())}</li>`).join("")}</ul>
     <div class="subtabs" role="tablist">${[["orders","Orders"],["days","By day"],["qb","In QuickBooks only ("+(r.qb_only||[]).length+")"]].map(([k,l],i)=>`<button role="tab" type="button" data-t="${k}" class="${i===0?"on":""}" aria-selected="${i===0}">${esc(l)}</button>`).join("")}</div><div id="tb"></div>`;
   const rows = r.orders.map((x,i)=>({...x, __id:i}));
-  const show = k => { main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); }); const h=$("#tb",main);
-    if(k==="orders"){ const chips=[["problem","Problems",x=>x.status==="problem"],["check","To check",x=>x.status==="check"],["ok","Match",x=>x.status==="ok"],["info","Not posted",x=>x.status==="info"],["all","All"]];
-      if(!rows.some(x=>x.status==="problem")) chips.push(chips.shift());
+  const qrows = (r.qb_only||[]).map((q,i)=>({...q,__id:i}));
+  const isMissing = x => !!x.missing && ["problem","check"].includes(x.status);
+  const whichMissing = x => x.missing==="quickbooks" ? "Not in QuickBooks" : "In QuickBooks, not a Shopify sale";
+  const show = k => { main.querySelectorAll(".subtabs button").forEach(b=>{ const on=b.dataset.t===k; b.classList.toggle("on",on); b.setAttribute("aria-selected",on); }); const h0=$("#tb",main), h=h0.cloneNode(false); h0.replaceWith(h);
+    if(k==="orders"){ const chips=[["missing","Missing from one side",isMissing],["problem","Problems",x=>x.status==="problem"],["check","To check",x=>x.status==="check"],["ok","Match",x=>x.status==="ok"],["info","Not posted",x=>x.status==="info"],["marked","Marked OK / dismissed",x=>x.status==="marked"||x.status==="dismissed"],["all","All"]];
+      if(!rows.some(isMissing)) chips.push(chips.shift());
+      if(!rows.some(x=>x.status==="problem") && !rows.some(isMissing)) chips.push(chips.shift());
       return makeTable(h,{rows, csvName:"reconcile_orders", chips, sort:["date",1],
         columns:[{k:"order",l:"Order",f:x=>shopifyOrderLink({order_id:x.order_id, order_name:x.order}),v:x=>x.order},
           {k:"date",l:"Date",nw:1,v:x=>shortDate(x.date),sv:x=>x.date+x.order},{k:"status",l:"Result",f:x=>rpill(x.status),v:x=>(RSTAT[x.status]||[])[1]},
-          {k:"notes",l:"What's different",w:1},{k:"shopify_total",l:"Shopify total",r:1,f:x=>money(x.shopify_total)},{k:"qb_total",l:"QuickBooks total",r:1,f:x=>money(x.qb_total)},
+          {k:"notes",l:"What's different",w:1,f:x=>`${x.missing&&!["ok","info"].includes(x.status)?`<strong>${esc(whichMissing(x))}.</strong> `:""}${esc(x.notes)}${x.mark_note&&(x.status==="marked"||x.status==="dismissed")?`<div class="muted">“${esc(x.mark_note)}”</div>`:""}`},{k:"shopify_total",l:"Shopify total",r:1,f:x=>money(x.shopify_total)},{k:"qb_total",l:"QuickBooks total",r:1,f:x=>money(x.qb_total)},
           {k:"qb_ref",l:"QuickBooks no."},{k:"matched_by",l:"Found by"},{k:"entered_by",l:"Entered by"}],
         detail:x=>`<table class="lines"><thead><tr><th></th><th>Shopify</th><th>QuickBooks</th></tr></thead><tbody>
           <tr><td>Type</td><td>${esc(x.would_post)} <span class="muted">(what this program posts)</span></td><td>${esc(x.qb_type||"—")}</td></tr>
@@ -782,19 +835,32 @@ pages.reconcile = async (main) => {
           ${x.shopify_tax_parts||x.qb_tax_parts?`<tr><td>Tax breakdown</td><td>${esc(x.shopify_tax_parts||"—").split("; ").join("<br>")}</td><td>${esc(x.qb_tax_parts||"—").split("; ").join("<br>")}</td></tr>`:""}
           <tr><td>Refunds</td><td>${money(x.refunds_shopify)||"—"}</td><td>${money(x.refunds_qb)||"—"}</td></tr>
           <tr><td>Customer</td><td>${esc(x.customer)}</td><td>${esc(x.qb_customer||"—")}</td></tr>
-          <tr><td>Payment</td><td>${esc(x.shopify_method)} <span class="muted">${esc(x.shopify_status)}</span></td><td>${esc(x.qb_method||"—")}${x.qb_balance!==null&&x.qb_balance!==undefined?` <span class="muted">still due ${money(x.qb_balance)}</span>`:""}</td></tr></tbody></table>`}); }
+          <tr><td>Payment</td><td>${esc(x.shopify_method)} <span class="muted">${esc(x.shopify_status)}</span></td><td>${esc(x.qb_method||"—")}${x.qb_balance!==null&&x.qb_balance!==undefined?` <span class="muted">still due ${money(x.qb_balance)}</span>`:""}</td></tr></tbody></table>${markBar(x)}`}); }
     if(k==="days") return makeTable(h,{rows:r.days.map((d,i)=>({...d,__id:i})), csvName:"reconcile_days", search:false, sort:["date",-1],
       columns:[{k:"date",l:"Date",nw:1,v:x=>niceDate(x.date),sv:x=>x.date},{k:"status",l:"Result",f:x=>rpill(x.status)},{k:"orders",l:"Orders",r:1},
         {k:"shopify_sales",l:"Shopify sales",r:1,f:x=>money(x.shopify_sales)},{k:"qb_sales",l:"QuickBooks sales",r:1,f:x=>money(x.qb_sales)},
         {k:"difference",l:"Difference",r:1,f:x=>x.difference?`<strong style="color:var(--bad)">${signed(x.difference)}</strong>`:"0"},
         {k:"shopify_tax",l:"Shopify tax",r:1,f:x=>money(x.shopify_tax)},{k:"qb_tax",l:"QuickBooks tax",r:1,f:x=>money(x.qb_tax)},
         {k:"missing",l:"Missing",r:1,v:x=>x.missing||""},{k:"problems",l:"Problems",r:1,v:x=>x.problems||""}]});
-    makeTable(h,{rows:(r.qb_only||[]).map((q,i)=>({...q,__id:i})), csvName:"reconcile_quickbooks_only", sort:["status",-1],
+    const qchips=[["missing","Not a Shopify sale",x=>x.status==="problem"],["info","Entered by hand",x=>x.status==="info"],["marked","Marked OK / dismissed",x=>x.status==="marked"||x.status==="dismissed"],["all","All"]];
+    if(!qrows.some(x=>x.status==="problem")) qchips.push(qchips.shift());
+    makeTable(h,{rows:qrows, csvName:"reconcile_quickbooks_only", sort:["status",-1], chips:qchips,
       emptyText:"Every QuickBooks sale in these dates belongs to a Shopify order.",
+      detail:x=>`<p style="margin:0 0 8px">${esc(x.type)} ${esc(x.ref||"(no number)")} · ${esc(niceDate(x.date))} · ${money(x.total)} · ${esc(x.customer||"")}${x.memo?` · memo “${esc(x.memo)}”`:""}</p>${markBar(x)}`,
       columns:[{k:"date",l:"Date",nw:1,v:x=>shortDate(x.date),sv:x=>x.date},{k:"status",l:"Result",f:x=>rpill(x.status),sv:x=>x.status==="problem"?1:0},
         {k:"type",l:"Type"},{k:"ref",l:"QuickBooks no."},{k:"total",l:"Total",r:1,f:x=>money(x.total)},{k:"customer",l:"Customer"},{k:"memo",l:"Memo",w:1},{k:"note",l:"Why it's listed"}]}); };
   main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) show(b.dataset.t); });
-  show("orders");
+  main.querySelector(".subtabs").addEventListener("click", e=>{ const b=e.target.closest("button"); if(b) RECON_TAB=b.dataset.t; });
+  main.addEventListener("click", async e=>{ const b=e.target.closest("[data-mark]"); if(!b) return;
+    const tr=b.closest("tr.detail"); const prev=tr&&tr.previousElementSibling; const id=prev&&prev.dataset.id;
+    const list = RECON_TAB==="qb" ? qrows : rows; const x=list.find(r=>String(r.__id)===String(id)); if(!x) return;
+    const note=(b.closest(".markbar").querySelector("[data-note]")||{}).value||"";
+    setBusy(b,true,"Saving…");
+    try{ await saveMark(x, b.dataset.mark, note);
+      FLASH_NEXT=[{none:"Undone - it counts again.",ok:"Marked OK.",dismiss:"Dismissed."}[b.dataset.mark],"good"];
+      route(); }
+    catch(err){ flash(main,"Couldn't save that: "+err.message,"bad"); setBusy(b,false); } });
+  show(arg==="qb" ? (RECON_TAB="qb") : RECON_TAB);
 };
 /* ======================================================================
    PURCHASING (Shopify admin panel only)
